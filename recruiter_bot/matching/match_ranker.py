@@ -18,6 +18,7 @@ def rank_candidates_for_job(
     job = jobs[0]
     credit = credit or load_taxonomy_credit(conn)
 
+    # One sorted list; each result carries its tier, so callers can group without losing any (D-34).
     results = []
     for candidate in load_candidate_profiles(conn):
         result = score_match(candidate, job, credit)

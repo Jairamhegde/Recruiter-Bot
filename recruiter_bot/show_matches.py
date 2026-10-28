@@ -32,7 +32,7 @@ def main() -> None:
 
     for rank, result in enumerate(results, start=1):
         name = result.candidate_name if direction == "job" else result.job_title
-        print(f"{rank:>2}. {result.score:5.1f}  {name:<32} {result.reason}")
+        print(f"{rank:>2}. {result.score:5.1f}  {result.tier:<14} {name:<32} {result.reason}")
 
 
 if __name__ == "__main__":

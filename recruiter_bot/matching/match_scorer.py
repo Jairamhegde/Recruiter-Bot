@@ -10,6 +10,10 @@ SKILL_WEIGHT = 0.7
 EXPERIENCE_WEIGHT = 0.2
 CULTURE_WEIGHT = 0.1
 
+# D-34: tiers for a qualifying match. 50 itself counts as a match (D-17).
+STRONG_MATCH_SCORE = 70.0
+MATCH_SCORE = 50.0
+
 
 @dataclass(frozen=True)
 class MatchResult:
@@ -31,6 +35,15 @@ class MatchResult:
     def qualifies(self) -> bool:
         """No skill credit means no match (D-12): experience and culture can't create one."""
         return self.skill_score > 0
+
+    @property
+    def tier(self) -> str:
+        """How strong a qualifying match is (D-34). Only meaningful when qualifies is true."""
+        if self.score >= STRONG_MATCH_SCORE:
+            return "strong_match"
+        if self.score >= MATCH_SCORE:
+            return "possible_match"
+        return "near_miss"
 
 
 def score_match(candidate: CandidateProfile, job: JobProfile, credit: TermCredit) -> MatchResult:

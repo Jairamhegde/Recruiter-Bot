@@ -202,6 +202,25 @@ The formula, replacing D-28's:
 - **Reason:** built from the breakdown (D-18), with the source of each partial credit, for example `negotiation ≈ persuasion ½`.
 - **Pinned rankings:** the expected results under this formula are in `tests/test_matching.py`, for example Sherlock 95.0 and Sheldon 43.3 for Backend Detective. The table under D-11 describes the full formula, and applies once availability is scored.
 
+**D-33. The API is FastAPI with plain synchronous handlers, in `recruiter_bot/api/`.**
+- **Why FastAPI:** it validates input and generates the API docs (`/docs`) from the same pydantic models, which covers the brief's optional API-docs bonus. It generates no SQL, so D-19 still holds.
+- **Synchronous handlers:** psycopg is used synchronously throughout, and FastAPI runs sync handlers in a thread pool. Async would add complexity with no gain at this size.
+- **One connection per request,** closed at the end. A connection pool is a later change if load needs it.
+- **Thin handlers:** they call the rankers (D-32) and shape the response. No scoring logic lives in the API.
+- **`GET /candidates/{id}/matches`** returns the candidate id and its matching jobs grouped into `strong_match`, `possible_match` and `near_miss` (D-34). Each tier is a list, best first, and every job carries its score, breakdown and reason (D-18). An empty tier is an empty list, so clients always see all three keys. An unknown id returns 404. Results aren't stored in `matches` yet (D-21).
+
+**D-34. Every qualifying match is labelled with a tier.**
+| Tier | Score | Meaning for the recruiter |
+|---|---|---|
+| `strong_match` | ≥ 70 | Worth contacting |
+| `possible_match` | 50 to < 70 | Worth a closer look |
+| `near_miss` | < 50 | Has some skill credit but falls short; the near misses of D-17 |
+
+- **The gate comes first:** a pair with no skill credit is not a match at all (D-12) and gets no tier. The tier only grades pairs that pass.
+- **50 counts as a match,** as D-17 sets it. The thresholds are named constants (`STRONG_MATCH_SCORE`, `MATCH_SCORE`), so a change is one line.
+- **Rankers still return one sorted list,** with the tier on each result, so no result is dropped and both directions answer in the same shape. Grouping happens where results are shown: the API groups them into three lists, and `show_matches` prints the tier on each line.
+- **Not yet:** the `?min_score=` filter and the limit of three near misses from D-17. Every near miss is listed for now.
+
 ---
 
 ## Scope check against the brief
