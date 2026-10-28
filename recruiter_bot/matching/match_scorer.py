@@ -14,6 +14,18 @@ CULTURE_WEIGHT = 0.1
 STRONG_MATCH_SCORE = 70.0
 MATCH_SCORE = 50.0
 
+# D-37: bump whenever the formula, weights or credit rules change, so stored scores are recomputed.
+ALGORITHM_VERSION = "2"
+
+
+def tier_for(score: float) -> str:
+    """How strong a qualifying match is (D-34). Worked out at read time, never stored."""
+    if score >= STRONG_MATCH_SCORE:
+        return "strong_match"
+    if score >= MATCH_SCORE:
+        return "possible_match"
+    return "near_miss"
+
 
 @dataclass(frozen=True)
 class MatchResult:
@@ -39,11 +51,7 @@ class MatchResult:
     @property
     def tier(self) -> str:
         """How strong a qualifying match is (D-34). Only meaningful when qualifies is true."""
-        if self.score >= STRONG_MATCH_SCORE:
-            return "strong_match"
-        if self.score >= MATCH_SCORE:
-            return "possible_match"
-        return "near_miss"
+        return tier_for(self.score)
 
 
 def score_match(candidate: CandidateProfile, job: JobProfile, credit: TermCredit) -> MatchResult:

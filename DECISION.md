@@ -29,6 +29,7 @@ The source data has no ids. The slug (`sherlock-h`) lets repeated ingestion upda
 
 **D-05. Availability is stored as two fields.**
 `open_to_opportunities` and `available_from DATE`. `Immediate` becomes (open, today), `2 weeks` becomes (open, today + 14), and `Not looking` becomes (not open, NULL). A CHECK constraint keeps the two consistent. Reason: the source mixes willingness to move with timing, and a date stays correct over time where "14 days from now" doesn't. "Today" comes from the database clock, so the result doesn't depend on the timezone of whoever runs the seed.
+_Amended by D-39:_ "today" is the day the statement was made: the first load for seed records, or the day of a `PATCH` that changes availability. Re-running the seed no longer restarts the clock.
 
 **D-06. Quirks and taglines are display-only.**
 They are free text, so they are returned in responses but never scored.
@@ -81,6 +82,10 @@ The two match endpoints sort the same score in opposite directions, so they can 
 
 **D-16. Ties are broken in a fixed order.**
 `score`, then skills, then availability, then name (alphabetical). Scores are rounded before ranking so floating-point noise can't change the order. The last step uses name, not `id`, so the order doesn't depend on which record was inserted first.
+- **Availability, in `GET /jobs/{id}/matches`:** among equal fits, open candidates come before those not looking, then the earliest start date. A start date in the past counts as today, because "Immediate" is stored as the day it was loaded. Without that, a candidate loaded earlier would outrank one loaded later, though both can start now.
+- **The best fit always wins first.** Availability only reorders equal scores, so a strong candidate who isn't looking is never pushed below a weaker one. Ties are common in this data, because jobs list only two or three skills: six groups of tied scores, such as Elle and Hermione at 90.0, where Elle starts now and Hermione in two weeks.
+- **Not in the candidate's view:** every job a candidate sees shares that candidate's availability, so it can't break a tie there. Those ties still break by job title.
+- **Not yet in `show_matches` or the tests,** which compute matches directly and break ties by name.
 
 **D-17. A minimum score of 50 decides what counts as a match.**
 It's configurable, including per request with `?min_score=`. When no result reaches it, the response returns an empty list plus up to 3 near misses, each showing its missing skills. Reason: 50 means the candidate has at least about a third of the required skills and is otherwise strong. On a 3-skill job, one matching skill with everything else ideal scores exactly 50. On a 2-skill job, one matching skill scores 60. An unexplained empty list gives the recruiter nothing to act on.
@@ -117,6 +122,7 @@ Each row holds the score, breakdown, reason and algorithm version, and the table
 
 **D-22. Ingestion: seed data loads on startup (`python -m recruiter_bot.seed` for now), and two POST endpoints will use the same code.**
 The brief asks for "a way to load" the data. Loading the seed files on startup covers that. `POST /candidates` and `POST /jobs` are a small extension that runs the same validation and insert code. A bulk `POST /ingest` was dropped, because startup seeding already does that job. Every write is an upsert, so repeated loads never create duplicates.
+_Amended by D-39:_ the seed now only inserts records that don't exist yet; updates go through `PATCH` (D-38).
 
 **D-23. The database is PostgreSQL, run with Docker Compose from the first commit.**
 The brief allows any relational database. Postgres adds real foreign keys, `CHECK` constraints and `JSONB`. Docker Compose isn't required by the brief; it's added so reviewers can start everything with `docker compose up`. The setup includes a Postgres healthcheck the app waits for, no Postgres port exposed to the host, and README instructions for running without Docker. The driver is psycopg 3: it only executes the SQL we write and generates none.
@@ -130,6 +136,7 @@ The brief says to use the language we're strongest in. psycopg 3 only sends the 
 1. `read_json_records` reads the file. `extract_candidates` and `extract_jobs` validate every record. A record missing a required field (candidate: name, skills, experience, availability; job: title, required skills, minimum experience), or with an invalid value, is **rejected with a reason and logged**. Valid records are kept, as in a typical bulk import, so one bad row doesn't block the rest. Unknown extra fields are ignored rather than rejected.
 2. `build_candidate_batch` and `build_job_batch` turn the valid records into column lists that map directly onto the INSERT statements.
 3. `insert_batch` writes the batch in one transaction, so the valid set is either fully applied or not at all. Inserts are set-based (`unnest` of arrays, one statement per table), not a loop of single-row inserts. Re-running is safe: upserts on slug only change rows whose data differs, and each record's skill and trait links are replaced as a whole. An advisory lock stops two concurrent loads from interleaving. Rejected input is logged to `ingestion_events` in its own transaction, independent of the batch.
+_Amended by D-39:_ the seed skips records that already exist, so re-running it never changes stored data.
 
 **D-26. Skill and trait lookup is deterministic, by compact key.**
 The compact key is the slug without hyphens, generated by the database. It catches words broken mid-word (`pattern-recog nition`). Symbols are rewritten before stripping (`c++` becomes `cplusplus`), so `C++`, `C#` and `C` stay distinct. Two other approaches were considered and rejected. A trie: lookups are exact matches against about 30 values, which a B-tree index already handles, and prefix matching would hand out skills candidates never listed. Automatic fuzzy matching with pg_trgm: on our own data it scores `crisis-management` against `project-management` at 0.42, above its default threshold of 0.3.
@@ -207,7 +214,48 @@ The formula, replacing D-28's:
 - **Synchronous handlers:** psycopg is used synchronously throughout, and FastAPI runs sync handlers in a thread pool. Async would add complexity with no gain at this size.
 - **One connection per request,** closed at the end. A connection pool is a later change if load needs it.
 - **Thin handlers:** they call the rankers (D-32) and shape the response. No scoring logic lives in the API.
-- **`GET /candidates/{id}/matches`** returns the candidate id and its matching jobs grouped into `strong_match`, `possible_match` and `near_miss` (D-34). Each tier is a list, best first, and every job carries its score, breakdown and reason (D-18). An empty tier is an empty list, so clients always see all three keys. An unknown id returns 404. Results aren't stored in `matches` yet (D-21).
+- **`GET /candidates/{id}/matches`** returns the candidate id and its matching jobs grouped into `strong_match`, `possible_match` and `near_miss` (D-34). Each tier is a list, best first, and every job carries its score, breakdown and reason (D-18). An empty tier is an empty list, so clients always see all three keys. An unknown id returns 404. Results are read from the `matches` table (D-37).
+- **`GET /jobs/{id}/matches`** is the recruiter's view, with the same shape: the job id and its matching candidates grouped into the same three tiers.
+
+**D-35. `POST /candidates` stores a new candidate and returns its matching jobs.**
+- **Same code as the seed (D-22):** the body is the seed's `CandidateInput` model, so Swagger documents the fields. It then goes through `extract_candidates` and `insert_batch`, so normalization and validation are identical.
+- **A name that already exists returns 409, not an overwrite.** The seed upserts by name, but the source data has no email or other identity. Through a public endpoint, posting "Sherlock H." would otherwise replace Sherlock's profile. Updating a profile would be a separate `PUT` later. The name check and the insert run in one transaction under the ingest lock, so two simultaneous requests can't both pass the check.
+- **Rejections:** content that fails ingestion's rules, such as an unrecognized availability, returns 422 and is logged to `ingestion_events` with source `api` (D-25). Input with the wrong shape is rejected by FastAPI with 422 before it reaches our code, so it isn't logged; logging it would need a custom error handler.
+- **Response:** 201 with the new `candidate_id` and its matching jobs, grouped by tier as in `GET /candidates/{id}/matches`. Unknown skills and traits are stored as usual and earn no credit (D-31).
+
+**D-36. `GET /candidates` and `GET /jobs` list every record with its id.**
+The match endpoints take an id, and ids aren't predictable: re-running the seed uses up identity values, so a new record can get id 76. Each list returns, sorted by id:
+- **Candidates:** id, name, experience, skills and traits.
+- **Jobs:** id, title, minimum experience, required skills and culture keywords.
+
+Both reuse the profile queries the rankers use, so a list shows exactly what matching sees. There's no pagination or search: at 15 candidates and 6 jobs a plain list is simpler, and either can be added when the data grows.
+
+**D-37. Matches are stored in the `matches` table and refreshed in the same transaction as the write that changes them.**
+This puts D-21 into practice.
+- **Postgres, one row per pair, not JSON.** Both directions read the same row through its two indexes, so they can never disagree (D-15). The row keeps the score, the breakdown, matched and missing skills, the reason and the algorithm version. Foreign keys remove a deleted person's or job's rows automatically. A JSON file or a list of ids per side would store each pair twice, lose the breakdown, and isn't safe under concurrent writes.
+- **What triggers a refresh:**
+  - **A candidate is added:** that candidate's rows are replaced, against every job.
+  - **A job is added:** that job's rows are replaced, against every candidate. There's no job POST yet.
+  - **A seed run, a taxonomy reload, or a changed formula:** every row is replaced.
+- **Replace, never append.** An entity's old rows are deleted and fresh ones inserted. Appending would keep matches that no longer qualify, or scores that changed.
+- **Same transaction as the write,** under the ingest lock. A reader sees either the old data with its old matches, or the new data with its new matches, never a mix.
+- **`algorithm_version`:** reads only return rows with the current version. When the API starts and finds rows from another version, or an empty table, it recomputes everything. A formula change therefore can't silently serve old scores.
+- **Tiers are worked out when reading,** from the stored score (D-34). Changing the 70 / 50 thresholds needs no recompute.
+- **Stored:** every qualifying pair, including near misses (D-12, D-21).
+- **At scale:** storing every pair stops working (100,000 × 10,000 is a billion rows). Real systems shortlist likely matches first, score only those, store the top results per entity, and recompute in a background queue. The table and the refresh functions stay the same; only what fills them changes.
+
+**D-38. `PATCH /candidates/{id}` and `PATCH /jobs/{id}` change a stored record.**
+- **Partial updates:** only the fields sent are changed. A list that is sent (skills, traits, required skills, culture keywords) replaces the stored list as a whole. Sending `null` for `quirk` or `tagline` clears it.
+- **Same rules as ingestion:** the same constraints as `CandidateInput` and `JobInput`, and the same normalization (D-02). An empty skills list or an unknown availability returns 422 and is logged to `ingestion_events` with source `api`, like `POST`.
+- **Renaming is allowed,** but a name or title that belongs to another record returns 409, since the slug is the identity (D-04). An unknown id returns 404.
+- **Matches are refreshed in the same transaction** (D-37): the patched record's rows are replaced against the other side. The response is the record's matches, grouped by tier, as in `GET …/matches`.
+- **No preferences:** the source data has none (D-09), so there's nothing to patch yet. Adding a preference field would come with its own decision on how it affects ranking.
+
+**D-39. The seed only inserts records that don't exist yet.**
+Once records can be edited, re-running the seed as an upsert would overwrite people's edits with the seed file. It also restarted the availability clock: a re-seed recalculated "2 weeks" from the new day, so Hermione's start date moved one day further out on every run and never arrived.
+- **The seed bootstraps; the API owns changes after that.** Records already stored, matched by slug (D-04), are skipped and reported. New records in the file are still inserted.
+- **This fixes the clock** (D-05): a seed record's availability is counted from its first load and never recalculated. A `PATCH` that changes availability counts from the day of the `PATCH`, when the person said it.
+- **Cost:** editing an existing record in the seed file has no effect after the first load. Change it with `PATCH`, or start from an empty database. The taxonomy still reloads in full on every seed run, since it's configuration, not user data (D-30).
 
 **D-34. Every qualifying match is labelled with a tier.**
 | Tier | Score | Meaning for the recruiter |

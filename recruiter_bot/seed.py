@@ -17,8 +17,20 @@ from recruiter_bot.ingest import (
     read_taxonomy,
     save_taxonomy,
 )
+from recruiter_bot.ingest.batch_inserter import INGEST_LOCK_SQL
+from recruiter_bot.matching import refresh_all_matches
 
 SEED_DIR = Path(__file__).resolve().parent.parent / "seed"
+
+EXISTING_CANDIDATE_SLUGS_SQL = "SELECT slug FROM candidates WHERE slug = ANY(%s)"
+
+EXISTING_JOB_SLUGS_SQL = "SELECT slug FROM jobs WHERE slug = ANY(%s)"
+
+
+def _not_yet_stored(conn, existing_slugs_sql: str, records: list) -> list:
+    slugs = [record.slug for record in records]
+    stored = {slug for (slug,) in conn.execute(existing_slugs_sql, (slugs,)).fetchall()}
+    return [record for record in records if record.slug not in stored]
 
 
 def run(today: date | None = None) -> None:
@@ -40,21 +52,29 @@ def run(today: date | None = None) -> None:
         _print_rejections("candidate", candidate_extraction.rejected)
         _print_rejections("job", job_extraction.rejected)
 
-        candidate_batch = build_candidate_batch(candidate_extraction.records)
-        job_batch = build_job_batch(job_extraction.records)
-        result = insert_batch(conn, candidate_batch, job_batch, source="seed")
-        taxonomy_result = save_taxonomy(conn, taxonomy)
+        # One transaction for profiles, taxonomy and matches, so readers never see one without the others (D-37).
+        with conn.transaction():
+            conn.execute(INGEST_LOCK_SQL)
+            # The seed only bootstraps: stored records are never overwritten, so edits made
+            # through PATCH survive and availability dates don't restart (D-39).
+            new_candidates = _not_yet_stored(conn, EXISTING_CANDIDATE_SLUGS_SQL, candidate_extraction.records)
+            new_jobs = _not_yet_stored(conn, EXISTING_JOB_SLUGS_SQL, job_extraction.records)
+            result = insert_batch(conn, build_candidate_batch(new_candidates), build_job_batch(new_jobs), source="seed")
+            taxonomy_result = save_taxonomy(conn, taxonomy)
+            match_count = refresh_all_matches(conn)
         term_report = build_term_report(conn, taxonomy)
 
+    kept = len(candidate_extraction.records) - len(new_candidates) + len(job_extraction.records) - len(new_jobs)
     print(
-        f"Seeded {result.candidates} candidates, {result.jobs} jobs, "
-        f"{result.skills} skills, {result.traits} traits "
+        f"Seeded {result.candidates} new candidates and {result.jobs} new jobs; "
+        f"{kept} records were already stored and kept as they are "
         f"({len(candidate_extraction.rejected)} candidate and {len(job_extraction.rejected)} job records rejected)."
     )
     print(
         f"Loaded the taxonomy: {taxonomy_result.concepts} concepts, {taxonomy_result.labels} labels, "
         f"{taxonomy_result.relations} relations (one row per direction)."
     )
+    print(f"Stored {match_count} matches.")
     _print_term_report(term_report)
 
 
