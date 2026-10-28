@@ -257,6 +257,15 @@ Once records can be edited, re-running the seed as an upsert would overwrite peo
 - **This fixes the clock** (D-05): a seed record's availability is counted from its first load and never recalculated. A `PATCH` that changes availability counts from the day of the `PATCH`, when the person said it.
 - **Cost:** editing an existing record in the seed file has no effect after the first load. Change it with `PATCH`, or start from an empty database. The taxonomy still reloads in full on every seed run, since it's configuration, not user data (D-30).
 
+**D-40. `POST /jobs` stores a new job and returns its matching candidates.**
+It mirrors `POST /candidates` (D-35):
+- **Same code as the seed:** the body is the seed's `JobInput` model, then `extract_jobs` and `insert_batch`.
+- **A title that already exists returns 409, not an overwrite.** The check and the insert run under the ingest lock. Changing an existing job goes through `PATCH` (D-38).
+- **Rejections:** content that fails ingestion's rules returns 422 and is logged with source `api`.
+- **Matches:** the new job's matches are computed against every candidate in the same transaction (D-37). The response is 201 with the `job_id` and its candidates grouped by tier.
+
+This completes D-22's two POST endpoints.
+
 **D-34. Every qualifying match is labelled with a tier.**
 | Tier | Score | Meaning for the recruiter |
 |---|---|---|

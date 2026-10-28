@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from recruiter_bot.ingest.batch_inserter import INGEST_LOCK_SQL
 from recruiter_bot.ingest.event_log_writer import log_accepted, log_rejected
+from recruiter_bot.ingest.jobs.job_creator import JobExists, JobRejected
 from recruiter_bot.ingest.record_errors import RecordError
 from recruiter_bot.ingest.text_normalizer import normalize_list, normalize_required
 from recruiter_bot.ingest.vocabulary_writer import resolve_skill_ids, resolve_trait_ids
@@ -15,14 +16,6 @@ REQUIRED_FIELDS = ("title", "required_skills", "min_experience_years")
 
 class JobNotFound(LookupError):
     pass
-
-
-class JobExists(ValueError):
-    """Another job already has this title (slug)."""
-
-
-class JobRejected(ValueError):
-    """The input breaks an ingestion rule; the message says which."""
 
 
 class JobPatch(BaseModel):

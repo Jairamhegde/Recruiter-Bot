@@ -1,8 +1,10 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, status
 
 from recruiter_bot.api.schemas import CandidateMatchesByTier, JobMatches, JobSummary
 from recruiter_bot.db import connect
-from recruiter_bot.ingest.jobs.job_updater import JobExists, JobNotFound, JobPatch, JobRejected, update_job
+from recruiter_bot.ingest.jobs.job_creator import JobExists, JobRejected, add_job
+from recruiter_bot.ingest.jobs.job_extractor import JobInput
+from recruiter_bot.ingest.jobs.job_updater import JobNotFound, JobPatch, update_job
 from recruiter_bot.matching import stored_matches_for_job
 from recruiter_bot.matching.profile_reader import load_job_profiles
 
@@ -15,6 +17,21 @@ def list_jobs() -> list[JobSummary]:
     with connect() as conn:
         profiles = load_job_profiles(conn)
     return [JobSummary.from_profile(profile) for profile in profiles]
+
+
+@router.post("", response_model=JobMatches, status_code=status.HTTP_201_CREATED)
+def create_job(job: JobInput) -> JobMatches:
+    """Stores a new job opening and returns its matching candidates, grouped by tier (D-40)."""
+    with connect() as conn:
+        try:
+            job_id = add_job(conn, job.model_dump())
+        except JobExists as error:
+            raise HTTPException(status_code=409, detail=str(error))
+        except JobRejected as error:
+            raise HTTPException(status_code=422, detail=str(error))
+        results = stored_matches_for_job(conn, job_id)
+
+    return JobMatches(job_id=job_id, matches=CandidateMatchesByTier.from_results(results))
 
 
 @router.patch("/{job_id}", response_model=JobMatches)
