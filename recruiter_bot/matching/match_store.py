@@ -62,6 +62,38 @@ def refresh_all_matches(conn: psycopg.Connection) -> int:
         return _insert_qualifying(conn, results)
 
 
+CANDIDATES_USING_TERMS_SQL = {
+    "skill": """SELECT DISTINCT candidate_skills.candidate_id FROM candidate_skills
+                JOIN skills ON skills.skill_id = candidate_skills.skill_id WHERE skills.slug = ANY(%s)""",
+    "trait": """SELECT DISTINCT candidate_traits.candidate_id FROM candidate_traits
+                JOIN traits ON traits.trait_id = candidate_traits.trait_id WHERE traits.slug = ANY(%s)""",
+}
+
+JOBS_USING_TERMS_SQL = {
+    "skill": """SELECT DISTINCT job_skills.job_id FROM job_skills
+                JOIN skills ON skills.skill_id = job_skills.skill_id WHERE skills.slug = ANY(%s)""",
+    "trait": """SELECT DISTINCT job_culture_traits.job_id FROM job_culture_traits
+                JOIN traits ON traits.trait_id = job_culture_traits.trait_id WHERE traits.slug = ANY(%s)""",
+}
+
+
+def refresh_matches_for_terms(conn: psycopg.Connection, terms_by_type: dict[str, list[str]]) -> None:
+    """Refreshes only the candidates and jobs that use these terms, e.g. after a word was linked (D-41)."""
+    candidate_ids = set()
+    job_ids = set()
+    for concept_type, terms in terms_by_type.items():
+        if terms:
+            candidate_ids |= {row[0] for row in conn.execute(CANDIDATES_USING_TERMS_SQL[concept_type], (terms,))}
+            job_ids |= {row[0] for row in conn.execute(JOBS_USING_TERMS_SQL[concept_type], (terms,))}
+    if not candidate_ids and not job_ids:
+        return
+    credit = load_taxonomy_credit(conn)  # once, not once per record
+    for candidate_id in sorted(candidate_ids):
+        refresh_candidate_matches(conn, candidate_id, credit)
+    for job_id in sorted(job_ids):
+        refresh_job_matches(conn, job_id, credit)
+
+
 def _insert_qualifying(conn: psycopg.Connection, results: list[MatchResult]) -> int:
     # Row by row, because matched and missing skills differ in length per pair.
     rows = []
@@ -109,6 +141,10 @@ class StoredMatch:
     matched_skills: list[str]
     missing_skills: list[str]
     reason: str
+    # Shown, never scored (D-06): the recruiter reads the quirk, the candidate reads the tagline.
+    candidate_quirk: str | None
+    job_tagline: str | None
+    candidate_is_open: bool  # open to opportunities; decides the recruiter's two sections (D-49)
 
     @property
     def tier(self) -> str:
@@ -118,7 +154,8 @@ class StoredMatch:
 STORED_MATCHES_SELECT = """
     SELECT matches.job_id, jobs.title, matches.candidate_id, candidates.full_name,
            matches.score, matches.skill_score, matches.experience_score, matches.culture_score,
-           matches.matched_skills, matches.missing_skills, matches.reason
+           matches.matched_skills, matches.missing_skills, matches.reason,
+           candidates.quirk, jobs.tagline, candidates.open_to_opportunities
     FROM matches
     JOIN jobs       ON jobs.job_id             = matches.job_id
     JOIN candidates ON candidates.candidate_id = matches.candidate_id
@@ -129,16 +166,19 @@ MATCHES_FOR_CANDIDATE_SQL = STORED_MATCHES_SELECT + """
     ORDER BY matches.score DESC, matches.skill_score DESC, jobs.title
 """
 
-# D-16: the best fit first; among equal fits, whoever can start soonest.
-# Open candidates come before those not looking, then the earliest start date. A date
-# in the past counts as today, since "Immediate" is stored as the day it was loaded.
+# D-16: the best fit first; among equal scores, whoever can start soonest.
+# 1. score
+# 2. open candidates before those not looking
+# 3. the earliest start date; a date in the past counts as today, since "Immediate"
+#    is stored as the day it was loaded
+# 4. still tied: a hash of the job and candidate ids. It gives the same order every time,
+#    but favours no one: sorting by name would always put Aaron before Zoe, for every job.
 MATCHES_FOR_JOB_SQL = STORED_MATCHES_SELECT + """
     WHERE matches.job_id = %s AND matches.algorithm_version = %s
     ORDER BY matches.score DESC,
-             matches.skill_score DESC,
              candidates.open_to_opportunities DESC,
              GREATEST(candidates.available_from, current_date),
-             candidates.full_name
+             md5(matches.job_id::text || ':' || matches.candidate_id::text)
 """
 
 CANDIDATE_EXISTS_SQL = "SELECT EXISTS (SELECT 1 FROM candidates WHERE candidate_id = %s)"
@@ -164,7 +204,8 @@ def _stored_matches(conn: psycopg.Connection, sql: str, entity_id: int) -> list[
     matches = []
     for row in conn.execute(sql, (entity_id, ALGORITHM_VERSION)).fetchall():
         (job_id, job_title, candidate_id, candidate_name, score, skill_score, experience_score,
-         culture_score, matched_skills, missing_skills, reason) = row
+         culture_score, matched_skills, missing_skills, reason, candidate_quirk, job_tagline,
+         candidate_is_open) = row
         matches.append(StoredMatch(
             job_id=job_id,
             job_title=job_title,
@@ -177,5 +218,8 @@ def _stored_matches(conn: psycopg.Connection, sql: str, entity_id: int) -> list[
             matched_skills=matched_skills,
             missing_skills=missing_skills,
             reason=reason,
+            candidate_quirk=candidate_quirk,
+            job_tagline=job_tagline,
+            candidate_is_open=candidate_is_open,
         ))
     return matches

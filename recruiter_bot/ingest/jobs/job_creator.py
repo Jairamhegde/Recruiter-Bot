@@ -7,6 +7,7 @@ from recruiter_bot.ingest.candidates.candidate_batch import build_candidate_batc
 from recruiter_bot.ingest.event_log_writer import log_rejected
 from recruiter_bot.ingest.jobs.job_batch import build_job_batch
 from recruiter_bot.ingest.jobs.job_extractor import extract_jobs
+from recruiter_bot.ingest.taxonomy.term_linker import link_record_terms
 from recruiter_bot.matching.match_store import refresh_job_matches
 
 JOB_ID_BY_SLUG_SQL = "SELECT job_id FROM jobs WHERE slug = %s"
@@ -36,5 +37,7 @@ def add_job(conn: psycopg.Connection, raw_job: Any, source: str = "api") -> int:
         insert_batch(conn, build_candidate_batch([]), build_job_batch([record]), source=source)
         job_id = conn.execute(JOB_ID_BY_SLUG_SQL, (record.slug,)).fetchone()[0]
         # Same transaction, so nobody sees the job without its matches (D-37).
+        # Unknown words are linked first, so this record's matches already use the links (D-41).
+        link_record_terms(conn, record.skill_slugs, record.culture_trait_slugs)
         refresh_job_matches(conn, job_id)
         return job_id

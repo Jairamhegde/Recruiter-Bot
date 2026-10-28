@@ -47,6 +47,17 @@ INSERT_CANDIDATE_TRAITS_SQL = """
     ON CONFLICT DO NOTHING
 """
 
+DELETE_CANDIDATE_JOB_PREFERENCES_SQL = """
+    DELETE FROM candidate_job_preferences
+    WHERE candidate_id = ANY(%s)
+"""
+
+INSERT_CANDIDATE_JOB_PREFERENCES_SQL = """
+    INSERT INTO candidate_job_preferences (candidate_id, preference)
+    SELECT * FROM unnest(%s::bigint[], %s::text[])
+    ON CONFLICT DO NOTHING
+"""
+
 
 def save_candidates(
     conn: psycopg.Connection,
@@ -54,7 +65,7 @@ def save_candidates(
     skill_ids: dict[str, int],
     trait_ids: dict[str, int],
 ) -> dict[str, int]:
-    """Upserts the candidates and replaces their skill and trait links. Returns slug -> candidate_id."""
+    """Upserts the candidates and replaces their skill, trait and job preference links. Returns slug -> candidate_id."""
     if not batch.slugs:
         return {}
 
@@ -90,5 +101,14 @@ def save_candidates(
         trait_value_ids.append(trait_ids[trait_slug])
     if trait_owner_ids:
         conn.execute(INSERT_CANDIDATE_TRAITS_SQL, (trait_owner_ids, trait_value_ids))
+
+    conn.execute(DELETE_CANDIDATE_JOB_PREFERENCES_SQL, (all_candidate_ids,))
+    preference_owner_ids = []
+    preferences = []
+    for candidate_slug, preference in batch.job_preference_links:
+        preference_owner_ids.append(candidate_ids[candidate_slug])
+        preferences.append(preference)
+    if preference_owner_ids:
+        conn.execute(INSERT_CANDIDATE_JOB_PREFERENCES_SQL, (preference_owner_ids, preferences))
 
     return candidate_ids

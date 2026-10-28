@@ -6,6 +6,28 @@ _Last updated: 2026-10-28_
 
 ---
 
+## Latest decision: how ties are broken (D-16, revised)
+
+When two candidates have the same score for a job, `GET /jobs/{id}/matches` orders them by:
+
+| Step | Rule | Why |
+|---|---|---|
+| 1 | **Total score**, highest first | The best fit always comes first. Nothing below can push a stronger candidate under a weaker one. |
+| 2 | **Open before not looking** | Among equal fits, a recruiter calls the one who is looking first. Someone not looking is still listed; they need a different approach, not a lower rank (D-10). |
+| 3 | **Earliest start date** | Among open candidates, whoever can start soonest. A date in the past counts as today, since "Immediate" is stored as the day it was loaded. |
+| 4 | **A neutral hash** of the job and candidate ids | Still tied means genuinely equivalent. The hash gives the same order on every call, but favours no one, and it differs per job. |
+
+**Not used, on purpose:**
+- **The name.** Alphabetical order puts the same people first on every tie, for every job (Aaron always beats Zoe). That's a documented source of bias.
+- **Years of experience.** Experience is already 20% of the score, capped at 1.0 once the minimum is met (D-13), so candidates tied on the total usually both meet it. Breaking ties by raw years would:
+  - reward over-qualification, which D-13 rejects: 15 years isn't a better fit than 8 for a 3-year job;
+  - favour older candidates, since years of experience track age. That's an age-discrimination risk under the US Age Discrimination in Employment Act and EU equal-treatment law.
+- **Skill score.** It was an earlier step: with equal totals it preferred the candidate whose score came more from skills. It was removed to keep the rule simple. In this data every tie also had equal skill scores, so nothing changed.
+
+The full reasoning is under D-16 in section 3. Since D-49, a job's `matches` only hold open candidates, so step 2 in effect sorts candidates who aren't looking into their own `proactive_offers` section.
+
+---
+
 ## Handling ambiguity
 
 The brief leaves some requirements open on purpose. Where it does, we pick a reasonable default, write it down here, and keep it configurable, so a changed requirement means a config change rather than a rewrite.
@@ -33,6 +55,7 @@ _Amended by D-39:_ "today" is the day the statement was made: the first load for
 
 **D-06. Quirks and taglines are display-only.**
 They are free text, so they are returned in responses but never scored.
+Each match shows what its reader needs: a job's candidates carry their `quirk` for the recruiter, and a candidate's jobs carry their `tagline` (D-46). Matching quirks against taglines was considered and rejected: the structured form of both already exists (traits and culture keywords), the text is mostly jokes and sarcasm, and the model step measured 67% precision even on plain words (D-45).
 
 **D-07. Experience means total career years.**
 The source doesn't give years per skill.
@@ -46,9 +69,11 @@ Required means the skill counts toward the coverage score, not that a candidate 
 
 **D-09. Candidate preferences are not modeled.**
 The source has no preference data, so `GET /candidates/{id}/matches` ranks jobs by how well the candidate fits each one. No placeholder column is added; one can be added later when real data exists.
+_Amended by D-47:_ job preferences are now collected and stored, but still not used in ranking.
 
 **D-10. Candidates who aren't looking are kept and flagged for a proactive offer.**
 Their score is lowered through availability, and each of their matches carries `outreach: { status: "passive", recommended_action: "proactive-offer" }`. Reason: the brief's own example, Michael Scott, is not looking. Passing `?include_passive=false` excludes them.
+_Amended by D-49:_ built differently. Their score isn't lowered; a passive candidate who scores higher than every open one appears in a separate `proactive_offers` section, with `recommended_action: proactive-offer`. `?include_passive=` isn't needed.
 
 ---
 
@@ -86,9 +111,15 @@ The two match endpoints sort the same score in opposite directions, so they can 
 - **The best fit always wins first.** Availability only reorders equal scores, so a strong candidate who isn't looking is never pushed below a weaker one. Ties are common in this data, because jobs list only two or three skills: six groups of tied scores, such as Elle and Hermione at 90.0, where Elle starts now and Hermione in two weeks.
 - **Not in the candidate's view:** every job a candidate sees shares that candidate's availability, so it can't break a tie there. Those ties still break by job title.
 - **Not yet in `show_matches` or the tests,** which compute matches directly and break ties by name.
+- **Revised: no name, no skill-score step, in `GET /jobs/{id}/matches`.** The order is now score, then open before not looking, then the earliest start date, then a hash of the job and candidate ids.
+  - **Why not the name:** sorting by name always puts the same people first, for every job; Aaron beats Zoe on every tie. Alphabetical order is a documented source of bias. The hash still gives the same order on every call, but differs per job, so no one is systematically first.
+  - **Why skill score was dropped:** with equal totals, it preferred whoever's score came more from skills. In this data every tie also has equal skill scores, so removing it changed nothing today.
+  - **Why experience isn't a tie-breaker:** experience is already in the score, capped at 1.0 at the minimum (D-13). Ranking ties by raw years would reward over-qualification, which D-13 rejects. Years of experience also track age, so it would favour older candidates; that's a discrimination risk (the US ADEA, EU equal-treatment law).
+  - **Not done:** marking tied candidates in the response (`tied_with`), so a recruiter can see when an order means nothing.
 
 **D-17. A minimum score of 50 decides what counts as a match.**
 It's configurable, including per request with `?min_score=`. When no result reaches it, the response returns an empty list plus up to 3 near misses, each showing its missing skills. Reason: 50 means the candidate has at least about a third of the required skills and is otherwise strong. On a 3-skill job, one matching skill with everything else ideal scores exactly 50. On a 2-skill job, one matching skill scores 60. An unexplained empty list gives the recruiter nothing to act on.
+_Built in D-49:_ near misses appear only when nothing reaches 50, at most 3, with a `near_misses_included` flag. `?min_score=` isn't built.
 
 **D-18. Every match includes a score breakdown and a reason built from it.**
 Example reason: `3/3 skills · 8y vs 3y min · available now · culture: analytical`. Building the reason from the breakdown means it can never contradict the score.
@@ -265,6 +296,141 @@ It mirrors `POST /candidates` (D-35):
 - **Matches:** the new job's matches are computed against every candidate in the same transaction (D-37). The response is 201 with the `job_id` and its candidates grouped by tier.
 
 This completes D-22's two POST endpoints.
+
+**D-41. Unknown words are linked by deterministic rules first: negation, word roots, typos, and grouping.**
+These are stages 0–3 of the linking pipeline, with the grouping step brought forward from stage 6. They run on every word that has no taxonomy label, at seed, `POST` and `PATCH`. No model is involved, so the same input always gives the same links.
+- **A wrong link is worse than a missing one.** A missing link costs some credit, and the report shows it. A wrong link silently changes every score that uses the word. Every rule is tuned for precision.
+- **1. Negation:** a word is negated when it contains a negating word (`not`, `no`, `non`, `never`, `without`, `lack`, `poor`, `weak`, `bad`, `terrible`, `unable`), or when it starts with `un`, `dis`, `in`, `im`, `ir`, `il` or `non` **and** what remains is a known label (`disorganized` → `organized`). A negated word is never linked. `discovery` isn't negated, because `covery` isn't a label.
+- **2. Root key:** filler words are dropped (`of`, `in`, `and`, `skill`…), each word is reduced to its root, and the roots are sorted. `manage-product`, `managing-products` and `product-management` all become `manag-product`. A word whose root key matches the labels of exactly one concept becomes an alternative label of it. Matching more than one concept is reported as ambiguous and not linked.
+  - **Conservative suffix rules:** `-ment`, `-ing`, `-ed`, `-es`, `-s`, and `-ion` only after `t`, then a trailing `e` and doubled consonants. Agent endings (`-er`, `-or`) are kept, because stripping them turns `customer` into `custom` and merges unrelated words. So `product-manager` doesn't link to `product-management`.
+- **3. Typos:** Damerau-Levenshtein distance, with the limit applied **per word**: the two root keys must differ in exactly one word. That word gets at most 1 edit at 5–7 letters, at most 2 when longer, and none below 5, so `sale`, `java` and `sql` are never corrected. Only a single closest concept counts. A first version applied the limit to the whole key, and linked `product-management` to `project-management` (2 edits). Per word, that's 2 edits in a 7-letter word, and it's rejected. **The first letter must also match:** typos rarely change it, and the evaluation set (D-42) caught `apathetic` being linked to `empathetic`, an opposite only 2 edits away. The word becomes a hidden label, as ESCO uses hidden labels for misspellings: `persistant`, `organised`.
+- **4. Grouping unknown words:** unknown words with the same root key that match no concept become one provisional concept (`auto-…`). The first word alphabetically is its preferred label. This covers both words being unknown: Steeven's `product-management` and a job's `manage-product`.
+- **Linking only through reviewed labels:** words link through curated labels, or through a provisional concept's preferred label, never through another automatic label. That stops chains from drifting (A → B → C).
+- **Audit:** automatic labels and concepts are marked `source = 'auto'`, with the method (`root_key`, `typo`, `group`) and the label they matched. A taxonomy reload deletes them, and the seed recreates them from the same rules.
+- **Throughput:** root keys are stored, indexed, on the vocabulary and label rows. Negation, root matching and grouping are therefore index lookups for each new word, and a request only links the words it brings. Afterwards only the records that use a newly linked word are refreshed, with the credit source loaded once. Typo correction is the one scan: the labels of one type, narrowed by key length. At ESCO scale it would move to a SymSpell index.
+- **Not done here:** splitting entries that name several skills (one term would need several concepts), meaning-based matching with models, and review screens. Those are the later stages, measured against a labelled evaluation set before automatic linking is switched on.
+
+**D-42. Meaning-based linking runs on two small local ONNX models, measured against a labelled evaluation set.**
+Stages 4–6 handle what the rules can't: words that mean the same but are written differently (`calm-under-stress` ↔ `calm-under-pressure`).
+- **ONNX Runtime, not PyTorch:** the same models at a fraction of the size, roughly 0.5 GB for the image instead of 2 GB. No GPU, no API key, and no network once the files are present.
+- **Embedding model (stage 4):** `BAAI/bge-small-en-v1.5` as the int8 ONNX export `Xenova/bge-small-en-v1.5`. 34 MB, MIT licence. It finds the concepts closest in meaning.
+- **NLI model (stage 5):** `cross-encoder/nli-deberta-v3-xsmall` as the int8 export `Xenova/nli-deberta-v3-xsmall`. 87 MB, Apache-2.0, trained on MNLI and SNLI. It checks whether one phrase implies the other, and catches contradictions, which embeddings miss. The label order (`0 = contradiction, 1 = entailment, 2 = neutral`) is read from the model's config, never assumed.
+- **Pinned and verified:** each file comes from a fixed commit (`ea104dac…`, `2a4f614a…`) and is checked against its SHA-256 before use, via `python -m recruiter_bot.linking.model_files`. The `.onnx` hashes are the ones Hugging Face publishes. The JSON files aren't in Git LFS, so their hashes were computed once from the fixed commit. The files live in `models/`, outside git.
+- **Evaluation set:** 116 hand-labelled unknown words in `recruiter_bot/linking/evaluation_cases.json`, each with the outcome it should get:
+  - **same (47):** linking is correct;
+  - **related (29):** must only ever go to review;
+  - **none (35):** near-misses (`product-management`), opposites (`anxious`), and new skills;
+  - **negated (5).**
+  
+  The loader checks every case against the taxonomy, so a typo fails immediately.
+- **Split by hash, not by hand:** about 60% of the cases tune the thresholds and 40% judge them. A case's split comes from a hash of its word, so nobody chooses which case lands where.
+- **Limits, stated plainly:** the labels are our judgment, not a recruiter's. "Same" versus "related" is sometimes a matter of opinion, and 116 cases give wide error margins, so a test score is an estimate, not a guarantee. At production scale the set would grow from review decisions and from ESCO's alternative labels, which are human-curated synonyms.
+- **It has already paid off:** running the rules over it exposed `apathetic` being linked to `empathetic` as a typo (D-41).
+- **One input per model run, never a padded batch.** The int8 models scale their numbers over the whole batch, so batching made a phrase's vector depend on the other phrases in it: a measured difference of 0.012, enough to flip a threshold. Run one at a time, results are identical however they're grouped. It costs about 3 ms per phrase and 9 ms per NLI pair, so roughly 100 ms per unknown word at most.
+- **Measured weaknesses the later stages must handle:**
+  - The embedding scores `calm` closer to `anxious` (0.79) than to `level headed` (0.64), the opposite problem D-29 describes. So stage 4 only proposes candidates, and stage 5 must confirm them.
+  - The NLI model calls some neutral pairs contradictions (`eating` vs `a doctor`: 0.92). So stage 6 calibrates its thresholds on the evaluation set rather than trusting the raw scores.
+
+**D-43. Stage 4 represents each concept by its labels, name and description, words in short sentences, and proposes 10 candidates.**
+For each unknown word, every concept of the same type gets the cosine similarity of its closest text. The top 10 go to stage 5. The choice was measured on the 43 calibration cases that have a known concept:
+
+| How a concept is represented | Top 1 | Top 3 | Top 5 | Top 10 |
+|---|---|---|---|---|
+| A: labels | 63% | 70% | 84% | 88% |
+| B: labels + names | 60% | 72% | 84% | 88% |
+| C: labels + names + descriptions | 72% | 81% | 86% | 93% |
+| **D: C, with words in short sentences** ("a person who is meticulous", "the skill of carpentry") | 70% | 81% | **88%** | **95%** |
+
+- **Descriptions help most.** "Careful and thorough with details" carries meaning a two-word slug doesn't. Short sentences help lone adjectives the same way.
+- **The difference between C and D is small:** one case is 2.3 points. D is chosen because it's at least as good at every cut that matters for retrieval.
+- **10 candidates, not 5:** this stage sets the ceiling for the whole pipeline, since a concept it misses can never be linked. Wrong candidates only cost a check in stage 5, about 0.2 s per unknown word for 20 NLI checks, and only for words the rules couldn't place.
+- **Not tuned to the test:** the remaining misses (`level-headed` and `composed` → calmness, `outspoken` → bluntness) come partly from thin descriptions. Rewriting descriptions until these cases pass would make the scores meaningless, so they were left alone. Richer ESCO descriptions are the production fix.
+- **Scale:** the index embeds about 160 texts in about 0.4 s at startup, and a search is one matrix product. At ESCO scale (around 100,000 labels), the vectors would be computed once and stored, for example in pgvector, rather than re-embedded at every start.
+
+**D-44. Stage 5 checks every candidate with NLI in both directions, against each of the concept's labels.**
+The unknown word and a label are put into sentences ("This person is level headed." / "This person is skilled in carpentry."), and the model is asked whether each implies the other. Each candidate keeps its best-agreeing label and records:
+- **forward and backward entailment.** Both high means a synonym; one high means broader or narrower.
+- **contradiction,** the higher of the two directions.
+
+Measured on the 630 candidate pairs of the calibration cases (27 synonyms against 603 other pairs):
+
+| Signal | AUC for synonym vs everything else |
+|---|---|
+| Similarity alone (stage 4) | 0.890 |
+| Entailment, one direction | 0.956 |
+| Mutual entailment (the weaker direction) | 0.936 |
+| Mutual entailment × (1 − contradiction) | 0.933 |
+
+- **NLI adds real value:** it catches opposites that similarity ranks highest. `pessimistic` vs optimism, `apathetic` vs empathy, `lazy` vs overachievement and `fragile` vs resilience all have similarity 0.85–0.90, and a contradiction of 1.00.
+- **It can't tell synonyms from related concepts:** both have a median mutual entailment of about 0.95. To the model, `coaching` and `mentorship` imply each other as strongly as `bargaining` and `negotiation`. That's the hardest decision in the pipeline, and stage 6 has to measure how often a related word would be auto-linked.
+- **Contradiction is noisy:** it's high (median 0.90) for unrelated pairs too. It means "not the same" more than "opposite", so it can reject candidates but can't detect opposites.
+- **One label was corrected:** `careless` was labelled 'none', as the opposite of detail-oriented. The system linked it to recklessness, with mutual entailment 0.99, and *careless* and *reckless* are near-synonyms. Changing labels after seeing results can quietly fit the test to the system, so this was the only change. It's recorded in the case's note, and the case is in the calibration split, not the test split.
+- **Cost:** about 20–30 NLI checks per unknown word (10 candidates, 1–2 labels, both directions). That's 14 s for 63 calibration words, about 0.2 s per word.
+
+**D-45. Stage 6 suggests, it doesn't link: automatic linking failed its precision target on the test cases.**
+The rule: take the candidate with the highest mutual entailment, and auto-link it only if its mutual entailment, its similarity, and its margin over the runner-up all clear a threshold. Otherwise send it to review with the top 3 suggestions, or call it no match.
+- **Calibration** (63 words, 616 settings tried, no wrong links allowed, then the most right ones): mutual entailment ≥ 0.50, similarity ≥ 0.86, margin ≥ 0.30. In words: one concept must clearly beat every other. Result: 7 right automatic links, 0 wrong.
+- **Test** (48 untouched words, run once with those thresholds): **8 right, 4 wrong, a precision of 67%,** against a target of 98%.
+  - 3 errors are related words linked as synonyms: `cybersecurity` → security, `eager-to-learn` → curiosity, `caring` → empathy (mutual entailment 0.96). That's the weakness D-44 measured, and no threshold removes it.
+  - 1 is a near-miss: `pattern-making` → pattern-recognition, at mutual entailment 0.51, just over the line.
+  - The 100% on calibration was overfitting: with 63 words, the zero-error region is small, and the chosen setting sat on its edge.
+- **Not re-tuned:** changing the thresholds now would mean choosing them on the test set, which would make its 67% meaningless. The test set has been used, so any future threshold claim needs new test data.
+- **Decision: automatic linking is off (`AUTOMATIC_LINKING = False`).** A confident match becomes the first review suggestion instead. In that mode, on the test words, the right concept is the first suggestion for 23 of 32 words (72%), and among the 3 suggestions for 25 of 32 (78%). Matching keeps the rules' precision (D-41), and the models save a reviewer most of the searching.
+- **What would justify switching it on:**
+  - **a larger labelled set,** several hundred words, for example from ESCO's alternative labels and from review decisions;
+  - **a signal that separates "same" from "related",** for example ESCO's broader/narrower hierarchy, or a model fine-tuned on ESCO synonyms (the SapBERT recipe);
+  - **precision of at least 98% on fresh test data** that played no part in the choice.
+- **Not built:** meaning-based grouping of two unknown words with each other. The evaluation set doesn't cover it, so it couldn't be measured. Grouping stays rule-based (D-41).
+
+**D-46. One command runs everything: a migration runner, and the API in Docker Compose.**
+- **`python -m recruiter_bot.migrate`** applies the SQL files in `migrations/` that a database hasn't run yet, in name order.
+  - **History:** a `schema_migrations` table records each file applied.
+  - **All or nothing:** each file runs in one transaction together with its history row, so it's applied completely or not at all.
+  - **Lock:** an advisory lock stops two copies starting at once from applying the same file twice.
+  - **Older databases:** `--mark-applied` records every file without running it, once, for a database set up by hand before the runner existed.
+- **`docker compose up --build`** starts Postgres, waits for its healthcheck, then starts the API. On every start the API runs the migrations, then the seed, then serves. Both steps are safe to repeat: migrations skip what's applied, and the seed only inserts records that aren't stored (D-39).
+- **The image:** `python:3.12-slim`, running as an unprivileged user, with only the API's dependencies.
+  - **Not included:** the model files and `onnxruntime`, `tokenizers` and `numpy`. They live in `requirements-linking.txt`, since the API doesn't use the model step (D-45).
+  - **Port:** the API is published on `127.0.0.1:8000`, or on `API_PORT` if 8000 is taken.
+- **Not yet:** the database port (`127.0.0.1:5433`) is still published for local development, which D-23 wanted to avoid. Only this machine can reach it.
+
+**D-47. Candidates can state job preferences; they're stored now and used later. The job title isn't scored.**
+- **The gap:** the score only measures how well a candidate *fits* a job. Nothing captures what the candidate *wants*, or what role they're aiming for. A job's title isn't scored either: candidates have no current title, past titles or desired role to compare it with, and the seed titles are jokes ("Backend Detective"), whose meaning already comes through their required skills.
+- **Why collect preferences before using them:** this reverses D-09's "no placeholder column". Preferences can't be backfilled, so every profile created without them would be lost to the later feature. Collecting them now makes that feature possible without rewriting ingestion.
+- **What exists:**
+  - **Field:** `job_preferences`, an optional list in `POST` and `PATCH /candidates` (for example `["Sales Engineer", "Solutions Architect"]`). It's normalized like every term (D-02), and duplicates are removed.
+  - **Storage:** one row per preference in `candidate_job_preferences`, like skills and traits (D-20), so a ranking step can join on it.
+  - **PATCH:** a list replaces the stored one, and `null` clears it.
+  - **Listing:** `GET /candidates` shows it.
+- **Not used in scoring:** match scores are identical with or without preferences, as checked through the API. Using them would be a one-sided signal in the candidate's ranker, after the fit score, never inside it (D-32). For example, jobs whose title matches a preference would rank first among equal fits. Comparing titles fairly would also need them mapped to an occupation taxonomy (ESCO occupations, O\*NET-SOC), since free-text titles vary as much as skill names.
+
+**D-48. The weights 0.7 / 0.2 / 0.1 are backed by a sensitivity analysis, not just judgment.**
+There are no hiring outcomes to learn weights from, so the next best evidence is how much the rankings depend on the choice. `python -m recruiter_bot.sensitivity.report` re-ranks every job's stored matches with other weights. The stored skill, experience and culture scores are reused, so no matching code runs again. It first checks that the production weights reproduce all 32 stored scores exactly.
+- **Real flips are told apart from ties:** a change of first place counts as a flip only when the new winner scores *strictly higher* than the old one. If the old winner is still level, only the tie-break order moved. Pairs tied under the new weights are also left out of the rank agreement. A first version counted ties as flips, and reported a misleading 77%.
+- **One weight at a time, ±0.05 and ±0.10:** **0 real flips.** The only two changes are ties, at culture 0: Tony with MacGyver (all three Rapid Prototyping candidates score 100), and Michael with Dwight for Sales Engineer.
+- **All 31 plausible weightings** (skills ≥ experience ≥ culture): in 5 of the 6 jobs, the winner is never beaten. Engineering Manager is the exception: Ted beats Miranda in 3 of the 31.
+- **That boundary is exact:** Miranda has 2/3 skills and no culture match; Ted has 1/2 skills and 1/2 culture; both have full experience. Ted wins only when **the culture weight exceeds one third of the skills weight.** Production uses 0.10 against 0.70 ÷ 3 ≈ 0.23, far from it.
+- **Rank agreement** never drops below 0.83, where 1.0 means the same order.
+- **Tiers are more fragile than winners:** candidates just below or above a boundary change tier under small moves. Leslie, Ted and Miranda sit at 48.3, just under 50; Michael at 71.7, just over 70. That's a property of any threshold, which is why every match shows its score next to its tier.
+- **Conclusion: the analysis supports the formula.** While skills stay dominant, the exact weights don't decide who comes first; the data does. Culture's real effect is separating otherwise equal candidates, the role D-11 gave it. The only genuine flip needs culture above a third of skills, which contradicts the design. Changing a weight therefore needs evidence of a better ranking, such as outcome data, not a different opinion.
+- **What it doesn't prove:** robustness isn't correctness. It shows the ranking doesn't hinge on 0.7 versus 0.65. It doesn't show a recruiter would rank people this way; only outcome data can, and this is 6 jobs.
+- **Guard test, to be written:** "under any ±0.05 change to one weight, no job's top candidate changes." It holds today, and it would catch a future formula change that quietly reshuffles winners.
+
+**D-49. The recruiter's view has two sections: who can be hired now, and who is worth a proactive offer. Near misses appear only when nothing else does.**
+"Who can I hire?" and "who should I approach?" are two different workflows, so `GET /jobs/{id}/matches` (and the job `POST` and `PATCH` responses) return:
+
+1. **`matches`:** candidates **open to opportunities**, whatever their start date, grouped by tier and ordered by score, then the earliest start, then the neutral hash (D-16).
+2. **`proactive_offers`,** second: candidates **not looking** who are a strong or possible match **and score higher than the best open candidate**. Each carries its tier and `recommended_action: proactive-offer`.
+
+- **Why "beats the best open candidate", not "strong matches only":** a proactive offer costs real effort, and it only pays off when nobody available is as good. A tier rule gets both directions wrong on this data:
+  - Engineering Manager's best candidate overall, Miranda (66.7, possible, not looking), would vanish from both sections.
+  - Michael (60.0) would be chased for Developer Relations, where four open candidates score 55–90.
+
+  With the chosen rule, the offers are Tony (Rapid Prototyping, 95.0 against 92.5), Miranda (Engineering Manager, 66.7 against 60.0) and Michael (Sales Engineer, 71.7 against 66.7).
+- **This answers the brief's planted contradiction:** "Michael Scott is applying to be a sales engineer", but the data says "Not looking". He is neither hidden nor ranked as if he could interview tomorrow: he's the one Sales Engineer worth an offer.
+- **Near misses** (below 50) appear only when there is no strong or possible match, as D-17 decided, and then at most 3, best first. They explain what's missing; next to real matches they're noise. A `near_misses_included` flag says whether they're there, and the `near_miss` key is always present, so the shape never changes. This applies to the candidate's view too: Ron, whose best job scores 43.3, sees two near misses, while Elle sees none.
+- **Unchanged:** scores, stored matches and the sensitivity results. This only decides which section a match goes into. The candidate's view has no passive split, since the candidate is always the same person.
+- **Not built:** `?include_near_misses=true` to see them anyway, and `?min_score=`.
 
 **D-34. Every qualifying match is labelled with a tier.**
 | Tier | Score | Meaning for the recruiter |

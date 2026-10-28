@@ -1,10 +1,10 @@
 import psycopg
 
-from recruiter_bot.ingest.text_normalizer import compact_key
+from recruiter_bot.ingest.text_normalizer import compact_key, root_key
 
 INSERT_SKILLS_SQL = """
-    INSERT INTO skills (slug)
-    SELECT unnest(%s::text[])
+    INSERT INTO skills (slug, root_key)
+    SELECT * FROM unnest(%s::text[], %s::text[])
     ON CONFLICT DO NOTHING
 """
 
@@ -15,8 +15,8 @@ FIND_SKILLS_BY_COMPACT_KEY_SQL = """
 """
 
 INSERT_TRAITS_SQL = """
-    INSERT INTO traits (slug)
-    SELECT unnest(%s::text[])
+    INSERT INTO traits (slug, root_key)
+    SELECT * FROM unnest(%s::text[], %s::text[])
     ON CONFLICT DO NOTHING
 """
 
@@ -46,7 +46,8 @@ def _resolve_ids(
     if not unique_slugs:
         return {}
 
-    conn.execute(insert_vocabulary_sql, (unique_slugs,))
+    # The root key is stored so linking unknown words is an index lookup (D-41).
+    conn.execute(insert_vocabulary_sql, (unique_slugs, [root_key(slug) for slug in unique_slugs]))
 
     keys = [compact_key(slug) for slug in unique_slugs]
     id_by_compact_key = {}

@@ -18,6 +18,7 @@ from recruiter_bot.ingest import (
     save_taxonomy,
 )
 from recruiter_bot.ingest.batch_inserter import INGEST_LOCK_SQL
+from recruiter_bot.ingest.taxonomy.term_linker import LinkResult, link_all_terms
 from recruiter_bot.matching import refresh_all_matches
 
 SEED_DIR = Path(__file__).resolve().parent.parent / "seed"
@@ -61,6 +62,8 @@ def run(today: date | None = None) -> None:
             new_jobs = _not_yet_stored(conn, EXISTING_JOB_SLUGS_SQL, job_extraction.records)
             result = insert_batch(conn, build_candidate_batch(new_candidates), build_job_batch(new_jobs), source="seed")
             taxonomy_result = save_taxonomy(conn, taxonomy)
+            # The reload removed every automatic label; the same rules recreate them (D-41).
+            link_result = link_all_terms(conn)
             match_count = refresh_all_matches(conn)
         term_report = build_term_report(conn, taxonomy)
 
@@ -75,7 +78,17 @@ def run(today: date | None = None) -> None:
         f"{taxonomy_result.relations} relations (one row per direction)."
     )
     print(f"Stored {match_count} matches.")
+    _print_link_result(link_result)
     _print_term_report(term_report)
+
+
+def _print_link_result(result: LinkResult) -> None:
+    for link in result.links:
+        print(f"linked {link.concept_type} {link.term} -> {link.concept} ({link.method}: {link.evidence})")
+    for term, negates in result.negated:
+        print(f"not linked, negated: {term} ({negates})")
+    for term, concepts in result.ambiguous:
+        print(f"not linked, ambiguous: {term} could be {', '.join(concepts)}")
 
 
 def _print_term_report(report: TermReport) -> None:

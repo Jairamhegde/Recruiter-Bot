@@ -4,6 +4,7 @@ import psycopg
 
 from recruiter_bot.ingest.batch_inserter import INGEST_LOCK_SQL
 from recruiter_bot.ingest.taxonomy.taxonomy_reader import Taxonomy
+from recruiter_bot.ingest.text_normalizer import root_key
 
 # Deleting the concepts cascades to their labels and relations.
 DELETE_CONCEPTS_SQL = "DELETE FROM concepts"
@@ -15,8 +16,8 @@ INSERT_CONCEPTS_SQL = """
 """
 
 INSERT_LABELS_SQL = """
-    INSERT INTO concept_labels (concept_id, concept_type, label, label_type)
-    SELECT * FROM unnest(%s::bigint[], %s::text[], %s::text[], %s::text[])
+    INSERT INTO concept_labels (concept_id, concept_type, label, label_type, root_key)
+    SELECT * FROM unnest(%s::bigint[], %s::text[], %s::text[], %s::text[], %s::text[])
 """
 
 INSERT_RELATIONS_SQL = """
@@ -54,6 +55,7 @@ def save_taxonomy(conn: psycopg.Connection, taxonomy: Taxonomy) -> TaxonomyResul
                 [label.concept_type for label in taxonomy.labels],
                 [label.label for label in taxonomy.labels],
                 [label.label_type for label in taxonomy.labels],
+                [root_key(label.label) for label in taxonomy.labels],
             ))
             conn.execute(INSERT_RELATIONS_SQL, (
                 [concept_ids[(relation.concept_type, relation.from_slug)] for relation in taxonomy.relations],

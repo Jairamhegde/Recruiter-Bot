@@ -207,10 +207,13 @@ def test_reverse_direction_for_ron(conn):
 
 def test_both_directions_agree_on_every_pair(conn):
     # D-15: one score per pair; the direction only changes what is ranked.
-    by_job = {(r.job_id, r.candidate_id): r.score for job_id in range(1, 7) for r in rank_candidates_for_job(conn, job_id)}
+    # Real ids, not 1-6 and 1-15: records added through the API take ids too.
+    job_ids = [row[0] for row in conn.execute("SELECT job_id FROM jobs")]
+    candidate_ids = [row[0] for row in conn.execute("SELECT candidate_id FROM candidates")]
+    by_job = {(r.job_id, r.candidate_id): r.score for job_id in job_ids for r in rank_candidates_for_job(conn, job_id)}
     by_candidate = {
         (r.job_id, r.candidate_id): r.score
-        for candidate_id in range(1, 16)
+        for candidate_id in candidate_ids
         for r in rank_jobs_for_candidate(conn, candidate_id)
     }
     assert by_job == by_candidate

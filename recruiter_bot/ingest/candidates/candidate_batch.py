@@ -15,6 +15,7 @@ class CandidateBatch:
     quirks: list[str | None]
     skill_links: list[tuple[str, str]]  # (candidate slug, skill slug)
     trait_links: list[tuple[str, str]]  # (candidate slug, trait slug)
+    job_preference_links: list[tuple[str, str]]  # (candidate slug, preference slug)
     payloads: list[Any]                 # raw input, written to ingestion_events only
 
 
@@ -27,6 +28,7 @@ def build_candidate_batch(records: list[CandidateRecord]) -> CandidateBatch:
     quirks = []
     skill_links = []
     trait_links = []
+    job_preference_links = []
     payloads = []
 
     for record in records:
@@ -42,6 +44,8 @@ def build_candidate_batch(records: list[CandidateRecord]) -> CandidateBatch:
             skill_links.append((record.slug, skill_slug))
         for trait_slug in record.trait_slugs:
             trait_links.append((record.slug, trait_slug))
+        for preference in record.job_preference_slugs:
+            job_preference_links.append((record.slug, preference))
 
     return CandidateBatch(
         slugs=slugs,
@@ -52,5 +56,6 @@ def build_candidate_batch(records: list[CandidateRecord]) -> CandidateBatch:
         quirks=quirks,
         skill_links=skill_links,
         trait_links=trait_links,
+        job_preference_links=job_preference_links,
         payloads=payloads,
     )
