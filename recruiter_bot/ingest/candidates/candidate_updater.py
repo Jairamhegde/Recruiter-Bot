@@ -9,6 +9,7 @@ from recruiter_bot.ingest.event_log_writer import log_accepted, log_rejected
 from recruiter_bot.ingest.record_errors import RecordError
 from recruiter_bot.ingest.text_normalizer import normalize_list, normalize_required, parse_availability
 from recruiter_bot.ingest.vocabulary_writer import resolve_skill_ids, resolve_trait_ids
+from recruiter_bot.ingest.taxonomy.term_linker import link_record_terms
 from recruiter_bot.matching.match_store import refresh_candidate_matches
 
 REQUIRED_FIELDS = ("name", "skills", "experience_years", "availability")
@@ -29,6 +30,7 @@ class CandidatePatch(BaseModel):
     availability: str | None = Field(default=None, min_length=1)
     traits: list[str] | None = None
     quirk: str | None = None  # null clears it
+    job_preferences: list[str] | None = None  # null clears them; stored, not yet used in matching (D-47)
 
     @model_validator(mode="after")
     def required_fields_cannot_be_cleared(self) -> "CandidatePatch":
@@ -62,6 +64,14 @@ REPLACE_SKILLS_INSERT_SQL = """
     ON CONFLICT DO NOTHING
 """
 
+REPLACE_JOB_PREFERENCES_DELETE_SQL = "DELETE FROM candidate_job_preferences WHERE candidate_id = %s"
+
+REPLACE_JOB_PREFERENCES_INSERT_SQL = """
+    INSERT INTO candidate_job_preferences (candidate_id, preference)
+    SELECT %s, unnest(%s::text[])
+    ON CONFLICT DO NOTHING
+"""
+
 REPLACE_TRAITS_DELETE_SQL = "DELETE FROM candidate_traits WHERE candidate_id = %s"
 
 REPLACE_TRAITS_INSERT_SQL = """
@@ -82,6 +92,9 @@ def update_candidate(conn: psycopg.Connection, candidate_id: int, patch: Candida
         slug = normalize_required(patch.name, "name") if "name" in sent else None
         skill_slugs = normalize_list(patch.skills, "skill") if "skills" in sent else None
         trait_slugs = normalize_list(patch.traits or [], "trait") if "traits" in sent else None
+        preference_slugs = (
+            normalize_list(patch.job_preferences or [], "job preference") if "job_preferences" in sent else None
+        )
         # A changed availability counts from today, the day the person said it (D-39).
         availability = parse_availability(patch.availability, today) if "availability" in sent else None
     except ValueError as error:
@@ -117,9 +130,14 @@ def update_candidate(conn: psycopg.Connection, candidate_id: int, patch: Candida
             trait_ids = resolve_trait_ids(conn, trait_slugs)
             conn.execute(REPLACE_TRAITS_DELETE_SQL, (candidate_id,))
             conn.execute(REPLACE_TRAITS_INSERT_SQL, (candidate_id, [trait_ids[t] for t in trait_slugs]))
+        if preference_slugs is not None:
+            conn.execute(REPLACE_JOB_PREFERENCES_DELETE_SQL, (candidate_id,))
+            conn.execute(REPLACE_JOB_PREFERENCES_INSERT_SQL, (candidate_id, preference_slugs))
 
         log_accepted(conn, "candidate", source, [slug or current_slug], [_payload(candidate_id, sent)])
         # Same transaction, so nobody sees the new profile with old matches (D-37).
+        # Unknown words are linked first, so this record's matches already use the links (D-41).
+        link_record_terms(conn, skill_slugs, trait_slugs)
         refresh_candidate_matches(conn, candidate_id)
 
 

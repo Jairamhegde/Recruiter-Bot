@@ -38,6 +38,41 @@ def compact_key(slug: str) -> str:
     return slug.replace("-", "")
 
 
+# D-41: words dropped from a root key, and the suffixes stripped from each word.
+ROOT_FILLER_WORDS = {"a", "an", "the", "of", "in", "on", "for", "to", "with", "and", "skill", "skills"}
+ROOT_SUFFIXES = ("ments", "ment", "ings", "ing", "ions", "ion", "ed", "es", "s")
+MIN_ROOT_LENGTH = 4
+
+
+def root_key(slug: str) -> str:
+    """'managing-products' and 'product-management' -> 'manag-product'. Word order doesn't matter."""
+    roots = {_root_word(word) for word in slug.split("-") if word not in ROOT_FILLER_WORDS}
+    if not roots:
+        return slug
+    return "-".join(sorted(roots))
+
+
+def _root_word(word: str) -> str:
+    """Deliberately conservative: a missed match costs less than a wrong one (D-41)."""
+    stripped = False
+    for suffix in ROOT_SUFFIXES:
+        if not word.endswith(suffix) or len(word) - len(suffix) < MIN_ROOT_LENGTH:
+            continue
+        stem = word[: -len(suffix)]
+        if suffix in ("ion", "ions") and not stem.endswith("t"):
+            continue  # negotiation -> negotiat, but mission stays mission
+        if suffix == "s" and word.endswith(("ss", "us", "is")):
+            continue  # process, status, analysis
+        word = stem
+        stripped = True
+        break
+    if word.endswith("e") and len(word) > MIN_ROOT_LENGTH:
+        word = word[:-1]  # manage -> manag, so it meets management and managing
+    if stripped and len(word) > MIN_ROOT_LENGTH and word[-1] == word[-2] and word[-1] not in "slzf":
+        word = word[:-1]  # planning -> plan, but staffing keeps staff
+    return word
+
+
 def parse_availability(text: str, today: date) -> tuple[bool, date | None]:
     """Returns (open_to_opportunities, available_from)."""
     value = " ".join(text.strip().lower().split())

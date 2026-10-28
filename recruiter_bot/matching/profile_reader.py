@@ -19,6 +19,7 @@ class CandidateProfile:
     experience_years: int
     skills: list[str]
     traits: list[str] = field(default_factory=list)
+    job_preferences: list[str] = field(default_factory=list)  # read, but not scored yet (D-47)
 
 
 JOB_PROFILES_SQL = """
@@ -61,7 +62,13 @@ CANDIDATE_PROFILES_SQL = """
                JOIN traits ON traits.trait_id = candidate_traits.trait_id
                WHERE candidate_traits.candidate_id = candidates.candidate_id
                ORDER BY traits.slug
-           ) AS traits
+           ) AS traits,
+           ARRAY(
+               SELECT candidate_job_preferences.preference
+               FROM candidate_job_preferences
+               WHERE candidate_job_preferences.candidate_id = candidates.candidate_id
+               ORDER BY candidate_job_preferences.preference
+           ) AS job_preferences
     FROM candidates
     WHERE %(candidate_id)s::bigint IS NULL OR candidates.candidate_id = %(candidate_id)s
     ORDER BY candidates.candidate_id
@@ -81,6 +88,6 @@ def load_candidate_profiles(conn: psycopg.Connection, candidate_id: int | None =
     """All candidates, or only the one with candidate_id."""
     profiles = []
     for row in conn.execute(CANDIDATE_PROFILES_SQL, {"candidate_id": candidate_id}).fetchall():
-        candidate_id_value, full_name, experience_years, skills, traits = row
-        profiles.append(CandidateProfile(candidate_id_value, full_name, experience_years, skills, traits))
+        candidate_id_value, full_name, experience_years, skills, traits, job_preferences = row
+        profiles.append(CandidateProfile(candidate_id_value, full_name, experience_years, skills, traits, job_preferences))
     return profiles

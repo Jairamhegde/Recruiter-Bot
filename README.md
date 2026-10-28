@@ -1,234 +1,192 @@
 # Recruiter Bot
 
-A backend that ingests candidate profiles and job openings and ranks the best matches in both directions, each with a score and a reason you can check by hand.
-
-Python 3.11+, PostgreSQL 16, psycopg 3 with hand-written SQL only, and FastAPI. Every decision below is logged with its reasoning in [DECISION.md](DECISION.md) (`D-xx` numbers refer to it).
+A small backend that loads candidates and job openings, then ranks the best matches both ways: the best candidates for a job, and the best jobs for a candidate. Every match has a score and a short reason. Every design decision is written down, with its reasoning, in [DECISION.md](DECISION.md); `D-xx` numbers below point to it.
 
 ---
 
-## Assumptions and ambiguity
+## Run it
 
-The brief leaves gaps on purpose. Each was resolved explicitly, and the choice is written down.
+You only need **Docker Desktop**. Nothing else has to be installed.
 
-| Ambiguity | Decision |
+1. **Install Docker Desktop** from https://www.docker.com/products/docker-desktop/ and start it. Wait until it says it's running.
+2. **Get the project.** Either run `git clone <repository-url>`, or download it as a ZIP and unzip it.
+3. **Open a terminal in the project folder:**
+   - **Windows:** open the folder in File Explorer, click the address bar, type `cmd`, and press Enter.
+   - **Mac:** right-click the folder in Finder and choose "New Terminal at Folder".
+4. **Start everything:**
+   ```bash
+   docker compose up --build
+   ```
+   The first time takes a few minutes. It's ready when you see `Uvicorn running on http://0.0.0.0:8000`.
+5. **Open http://127.0.0.1:8000/docs in your browser.** It's an interactive page where you can try every endpoint: click one, then "Try it out", then "Execute".
+
+**To stop it,** press `Ctrl + C` in the terminal. **To start again with fresh data,** run `docker compose down -v`, then step 4. This deletes everything that was added.
+
+**If port 8000 is already in use,** pick another one:
+
+| System | Command |
 |---|---|
-| `pattern-recog nition`, `public-speaki ng` in the source | PDF line-break artifacts, corrected in the seed (D-01) |
-| `stakeholder management` vs `stakeholder-management` | All terms are normalized: lowercase, hyphenated (D-02) |
-| Does "required skills" mean all of them? | No: it's coverage. Nobody has all three skills for Engineering Manager, so all-or-nothing would leave that job empty (D-08) |
-| What does "experience" measure? | Total career years; the data gives no years per skill (D-07). Exceeding the minimum isn't penalized (D-13) |
-| **Michael Scott is "applying" in the brief, but "Not looking" in the data** | "Not looking" means not actively looking, not "do not contact". Passive candidates stay in the results; availability never lowers the fit score and only breaks ties (D-10, D-16) |
-| "2 weeks" from when? | Stored as a date, counted from the first load, and never recalculated on a re-seed (D-05, D-39) |
-| `loyalty`, `optimism`, `precision`… listed as skills | They describe personality, so the taxonomy has no skill concepts for them, and the seed run reports them (D-30) |
-| `fast-paced` as a culture keyword | It describes the job, not a person, so it only matches exactly (D-29) |
-| Quirks and taglines | Free text, so not scored (D-06) |
-| Candidate preferences | The data has none, so they aren't modeled (D-09) |
-| Identity of a record | No email in the data, so the normalized name is the key. A duplicate name returns 409, never an overwrite (D-04, D-35) |
-| A word the taxonomy doesn't know | No credit and no penalty; each seed run lists it, with review hints (D-31) |
+| Mac / Linux | `API_PORT=8001 docker compose up --build` |
+| Windows (cmd) | `set API_PORT=8001 && docker compose up --build` |
+| Windows (PowerShell) | `$env:API_PORT=8001; docker compose up --build` |
+
+Then use `8001` instead of `8000` in the addresses below.
 
 ---
 
-## Trade-offs
+## Try it
 
-| Decision | Gain | Cost |
-|---|---|---|
-| Curated taxonomy, not runtime embeddings (D-29) | Deterministic, explainable, no opposites scored as matches | Synonyms nobody has curated get no credit |
-| Pure scoring function with injected credit (D-32) | Both directions agree; testable without a database | Direction-specific signals have to live in the rankers |
-| Exact one-to-one assignment (D-32) | No double-counting of one skill | More code than a simple overlap count |
-| Weights 70 / 20 / 10 (D-32) | The two required factors dominate; culture only refines | The weights are judgment calls, not learned from hiring outcomes |
-| Availability outside the score (D-16) | The best fit stays first; stored scores don't go stale as dates pass | Availability only matters when scores tie |
-| Matches stored and refreshed in the same transaction as each write, with a version check (D-37) | Reads are one indexed query and can't serve stale scores | Every write recomputes against the whole other side, fine at this size, a background job at scale |
-| Seed inserts new records only (D-39) | API edits survive, availability dates don't drift | Editing an existing record in the seed file has no effect after the first load |
-
----
-
-## API
-
-| Method | Path | What it does |
-|---|---|---|
-| `GET` | `/jobs` | Every job with its id |
-| `GET` | `/jobs/{id}/matches` | **Ranked candidates for a job** (required by the brief) |
-| `POST` | `/jobs` | Store a new job; returns its matches |
-| `PATCH` | `/jobs/{id}` | Change some of a job's fields; returns its refreshed matches |
-| `GET` | `/candidates` | Every candidate with its id |
-| `GET` | `/candidates/{id}/matches` | **Ranked jobs for a candidate** (required by the brief) |
-| `POST` | `/candidates` | Store a new candidate; returns their matches |
-| `PATCH` | `/candidates/{id}` | Change some of a candidate's fields; returns their refreshed matches |
-
-Ids follow insertion order, so look them up with `GET /jobs` or `GET /candidates` first.
-
-### Ranked candidates for a job
+**On Windows, type `curl.exe` instead of `curl`.** For sending data (the `POST` and `PATCH` examples), the `/docs` page is easier than the terminal.
 
 ```bash
-curl http://127.0.0.1:8000/jobs/5/matches
+# Every job and candidate, with their ids
+curl http://127.0.0.1:8000/jobs
+curl http://127.0.0.1:8000/candidates
+
+# Ranked candidates for a job (required by the brief)
+curl http://127.0.0.1:8000/jobs/6/matches
+
+# Ranked jobs for a candidate (required by the brief)
+curl http://127.0.0.1:8000/candidates/7/matches
+
+# Add a candidate: the response is their matching jobs
+curl -X POST http://127.0.0.1:8000/candidates -H "Content-Type: application/json" \
+  -d '{"name": "Jordan", "skills": ["Crisis Management", "Strategy", "Persuasion"], "experience_years": 6, "availability": "2 weeks", "traits": ["Calm", "Decisive"]}'
+
+# Change one field of a job: the response is its refreshed matches
+curl -X PATCH http://127.0.0.1:8000/jobs/6 -H "Content-Type: application/json" -d '{"min_experience_years": 4}'
 ```
+
+`GET /jobs/6/matches` (Sales Engineer) returns, shortened:
 
 ```json
 {
-  "job_id": 5,
+  "job_id": 6,
   "matches": {
-    "strong_match": [
-      { "candidate_id": 12, "candidate_name": "Olivia P.", "score": 95.0,
-        "skill_score": 1.0, "experience_score": 1.0, "culture_score": 0.5,
-        "matched_skills": ["crisis-management", "negotiation", "strategy"], "missing_skills": [],
-        "reason": "3/3 skills (crisis-management, negotiation, strategy) · 13y vs 4y min · culture 1/2 (decisive)" },
-      { "candidate_id": 10, "candidate_name": "Katniss E.", "score": 74.2,
-        "reason": "2/3 skills (crisis-management, strategy) · missing negotiation · 5y vs 4y min · culture 1.5/2 (calm-under-pressure ≈ resilient ½, decisive)" }
+    "strong_match": [],
+    "possible_match": [
+      { "candidate_name": "Dwight S.", "score": 66.7,
+        "reason": "2/3 skills (negotiation, sales) · missing public-speaking · 9y vs 3y min · culture 0/2",
+        "quirk": "Assistant to the regional backend engineer." },
+      { "candidate_name": "Elle W.", "score": 55.0,
+        "reason": "1.5/3 skills (public-speaking, sales ≈ persuasion ½) · missing negotiation · 3y vs 3y min · culture 0/2" }
     ],
-    "possible_match": [],
-    "near_miss": [
-      { "candidate_name": "Miranda P.", "score": 48.3,
-        "reason": "1/3 skills (negotiation) · missing crisis-management, strategy · 18y vs 4y min · culture 1/2 (decisive)" }
-    ]
-  }
+    "near_miss": [],
+    "near_misses_included": false
+  },
+  "proactive_offers": [
+    { "candidate_name": "Michael S.", "score": 71.7, "tier": "strong_match", "recommended_action": "proactive-offer",
+      "reason": "2/3 skills (public-speaking, sales) · missing negotiation · 11y vs 3y min · culture 1/2 (enthusiastic)" }
+  ]
 }
 ```
-*(Shortened: every entry carries the full set of fields shown for Olivia.)*
 
-### Ranked jobs for a candidate
-
-```bash
-curl http://127.0.0.1:8000/candidates/7/matches
-```
-Elle W. gets Developer Relations Lead (90.0, `strong_match`), Sales Engineer (55.0, `possible_match`) and Incident Commander (26.7, `near_miss`), in the same shape.
-
-### Add or change a record
-
-```bash
-curl -X POST http://127.0.0.1:8000/candidates -H "Content-Type: application/json" \
-  -d '{"name": "Jordan", "skills": ["Crisis Management", "Strategy", "Persuasion"],
-       "experience_years": 6, "availability": "2 weeks", "traits": ["Calm", "Decisive"]}'
-
-curl -X PATCH http://127.0.0.1:8000/jobs/6 -H "Content-Type: application/json" \
-  -d '{"min_experience_years": 4}'
-```
-
-| Status | When |
-|---|---|
-| `201` / `200` | Created / updated; the body is the record's matches |
-| `404` | Unknown id |
-| `409` | The name or title already belongs to another record |
-| `422` | Invalid input, such as no skills or `"availability": "someday"` |
+Errors: `404` for an unknown id, `409` when a name or title already exists, and `422` for invalid input, such as no skills or `"availability": "someday"`.
 
 ---
 
-## How matching works
+## Ambiguities, and what was assumed
 
-### 1. Skill credit, from an ESCO-shaped taxonomy (D-29, D-30)
+The brief says real requirements are rarely fully specified. Each gap below was resolved explicitly, with evidence from the data, and logged.
 
-Exact string matching misses synonyms, and embeddings rate opposites as similar (`chaotic` vs `organized`). So skills and traits are matched through a small taxonomy in the shape of [ESCO](https://esco.ec.europa.eu): each concept has a preferred label, alternative labels (synonyms) and hidden labels (misspellings). It is filled with our own data: 51 concepts and 11 curated relations, in [`seed/taxonomy.json`](seed/taxonomy.json).
+| Ambiguity | What was assumed | Evidence |
+|---|---|---|
+| **Must-have or nice-to-have skills?** Jobs list skills with no priority. | Every listed skill counts equally, but as **coverage**, not all-or-nothing: 2 of 3 skills earns ⅔ of the skill score (D-08). | **No candidate has all three Engineering Manager skills** (team-building, stakeholder-management, leadership). An all-or-nothing rule would leave that job with no candidates at all. With coverage, Miranda (2 of 3) and Ted rank sensibly. |
+| **The brief says Michael Scott is "applying" for Sales Engineer; the data says "Not looking".** | "Not looking" means not *actively* looking, not "do not contact". | Michael is the best Sales Engineer fit (71.7). Hiding him loses the best person, and ranking him as available misleads the recruiter. So he appears under `proactive_offers`, which is where a recruiter would act on him (D-49). |
+| **"2 weeks" from when?** | Converted to a real date when first loaded, and never recalculated. | Recalculating on each re-seed moved Hermione's start date one day further every run, so it never arrived. That bug was found and fixed (D-05, D-39). |
+| **Broken words in the source** (`pattern-recog nition`) | PDF line-break artifacts, corrected. | Every one splits a word mid-word (D-01). |
+| **`stakeholder management` vs `stakeholder-management`** | Every term is normalized: lowercase, hyphenated. | The same skill is written both ways in the source (D-02). |
+| **Skills that are really personality** (`loyalty`, `optimism`, `precision`) | Listed as skills, but given no skill credit. | They describe a person, not a skill. The seed run reports them so the source can be fixed (D-30). |
+| **What "experience" measures** | Total career years. More than the minimum isn't penalized. | The data has no years per skill (D-07, D-13). |
+| **Quirks and taglines** | Shown with every match, never scored. | They're mostly jokes ("Says nothing. Everyone panics."), and their structured form (traits and culture keywords) is already scored (D-06). |
+| **Job title** | Not scored. | Candidates have no title or desired role to compare it with, and a title's meaning already comes through its required skills (D-47). |
+| **Candidate preferences** | None in the data. An optional `job_preferences` field is stored now. | Preferences can't be backfilled later, so they're collected before they're used (D-47). |
+| **No email or id in the data** | The normalized name identifies a record; a duplicate name returns `409`, never an overwrite. | Otherwise anyone posting "Sherlock H." could replace his profile (D-04, D-35). |
+| **Misspelled or reworded skills** | Typos, word order and word forms are linked by rules (`building-teams` = team-building). Anything else gets no credit, and no penalty. | A wrong link would silently change every score using that word, so the rules favour precision. They reject `product-management` → project-management, for example (D-41). |
+
+---
+
+## How matches are ranked
+
+**For a job, the recruiter sees two sections** (D-49):
+1. **`matches`:** candidates open to opportunities, grouped into `strong_match` (70 or more), `possible_match` (50 or more) and `near_miss` (below 50).
+2. **`proactive_offers`:** candidates *not* looking who score higher than every open candidate. That's exactly when an offer is worth the effort, as with Tony, Miranda and Michael.
+
+**Near misses only appear when nobody reaches 50,** and at most 3, so they explain what's missing instead of cluttering real matches.
+
+**Order within the list, when scores tie** (D-16):
+1. Total score
+2. Earliest start date (a date in the past counts as today)
+3. A neutral hash of the job and candidate ids: the same order every time, favouring no one
+
+**The name is never used:** alphabetical order would put the same people first on every tie, for every job.
+
+### Why experience is not a tie-breaker
+- **It's already in the score:** 20%, and full once the job's minimum is met. Two tied candidates usually both meet it.
+- **More years isn't a better fit:** 15 years isn't better than 8 for a job asking for 3.
+- **It tracks age.** Preferring more years would favour older candidates, an age-discrimination risk under the US Age Discrimination in Employment Act and EU equal-treatment law.
+
+---
+
+## How skills are matched
+
+**Skills and traits are matched through a small taxonomy in the shape of [ESCO](https://esco.ec.europa.eu)** (D-29), filled with our own data (51 concepts): each concept has a preferred label, synonyms, and hidden labels for misspellings. Embeddings weren't used for matching, because they score opposites as similar (`calm` sits closer to `anxious` than to `level headed`).
 
 | Candidate term vs job term | Credit | Example |
 |---|---|---|
-| Same term | 1.0 | `sales` / `sales` |
-| Same concept (synonym) | 1.0 | `tenacious` / `persistent` |
-| Related concept | 0.5 | `persuasion` / `negotiation` |
-| Reviewed as unrelated | 0 | `project-management` / `crisis-management` |
+| Same word, or same concept | 1.0 | `tenacious` = `persistent` |
+| Related concept | 0.5 | `persuasion` ≈ `negotiation` |
 | Anything else | 0 | |
 
-### 2. Coverage, one-to-one (D-32)
+**Each candidate skill covers at most one requirement,** so one `persuasion` can't count toward both `sales` and `negotiation`.
 
-For each part, skills and culture:
-
-```
-coverage = credit earned ÷ number of terms the job lists
-```
-
-Each candidate term covers at most one requirement, so one `persuasion` can't earn half of both `sales` and `negotiation`. The best assignment is found exactly, not greedily. Extra skills the candidate has neither help nor hurt.
-
-### 3. The score (D-32)
+## The score
 
 ```
-skills     S = skill coverage                          (0–1)
-experience E = 1 if years ≥ minimum, else years ÷ minimum
-culture    T = coverage of the job's culture keywords by the candidate's traits
-
-score = round(100 × (0.7·S + 0.2·E + 0.1·T), 1)
+score = 100 × (0.7 × skills + 0.2 × experience + 0.1 × culture)
 ```
 
-- **Worked example:** Sherlock for Backend Detective: 100 × (0.7·1 + 0.2·1 + 0.1·0.5) = **95.0**.
-- **A job with no culture keywords** leaves T out and rescales: `(0.7·S + 0.2·E) ÷ 0.9`.
-- **No skill credit, no match** (D-12): experience and culture alone can't put a candidate on the list.
+- **skills:** credit earned ÷ the number of skills the job lists.
+- **experience:** 1 if years ≥ the minimum, otherwise years ÷ minimum.
+- **culture:** credit earned ÷ the number of culture keywords the job lists.
 
-### 4. Tiers and order (D-34, D-16)
+- **Worked example:** Sherlock for Backend Detective is 100 × (0.7 × 1 + 0.2 × 1 + 0.1 × 0.5) = **95.0**.
+- **No skill credit means no match,** whatever the experience or culture (D-12).
+- **One score serves both directions:** a pair always has the same score in the recruiter's view and in the candidate's (D-15, D-32).
+- **Matches are stored,** and refreshed in the same transaction as every write, so reads are fast and never stale (D-37).
 
-| Tier | Score |
-|---|---|
-| `strong_match` | ≥ 70 |
-| `possible_match` | 50 to < 70 |
-| `near_miss` | < 50, with some skill credit |
+**Are the weights right?** There are no hiring outcomes to learn them from, so a sensitivity check (`python -m recruiter_bot.sensitivity.report`) re-ranked every job under other weights (D-48):
+- **Moving any one weight by ±0.05 or ±0.10 never changes a job's winner.**
+- **Across 31 plausible weightings,** 5 of the 6 winners are never beaten.
+- **The one exception** needs culture weighted at more than a third of skills.
 
-Within the list: score, then skill score, then (for a job's candidates) availability, so that among equal fits the one who can start soonest comes first, then name.
-
-### 5. One score, both directions (D-15, D-32)
-
-`score_match(candidate, job, credit)` is a pure function with no database and no notion of direction. Both endpoints read the same stored row, so a pair can never get two different scores. The credit source is passed in, so replacing the taxonomy (with real ESCO data, say) changes the source and not the scorer.
+So skills decide the winner, and culture only separates otherwise equal candidates.
 
 ---
 
-## Known limitations
+## Future work
 
-Stated plainly, so a reviewer doesn't have to find them:
-
-- **There's no migration runner yet,** and Docker Compose starts only the database. Migrations are applied with the one-time command in Quick start.
-- **Synonyms outside the taxonomy get no credit:** `customer-handling` doesn't match `customer-management`. The planned fix is local-model linking with negation checks, after the MVP (D-31).
-- **Quirks and taglines aren't returned in responses yet.**
-- **Not built yet:** `?min_score=`, the three-near-miss limit (D-17) and `?include_passive=` (D-10).
-- **`show_matches` and the tests compute matches directly** and break ties by name; the API also uses availability.
-- **The database tests use the development database,** so records added through the API can affect them.
-- **[docs/ER_DIAGRAM.md](docs/ER_DIAGRAM.md)** covers the first migration only.
+- **Real ESCO data:** the taxonomy already has ESCO's shape and empty reference slots, so ESCO's 13,000+ skills could be loaded into the same tables.
+- **A model for words the rules can't place** (`customer-handling` vs `customer-management`):
+  - **The prototype:** local embedding and NLI models, measured against 116 hand-labelled words, reached only **67% precision** on the test set, against a 98% target, so it's not in the project (D-42 to D-45).
+  - **The next attempt** needs a model fine-tuned on ESCO synonyms and a larger labelled set.
+- **Job preferences carrying real weight:** `job_preferences` is already collected. Next, jobs a candidate prefers would rank higher **in the candidate's own list.** That boosts their ranking without changing the shared fit score, so both directions still agree (D-47).
+- **Job start dates:** compare a candidate's availability with when the job needs someone, not only with today.
+- **Spreading attention:** the same strong candidates top several jobs. Production platforms balance this with reciprocal or stable matching (the Gale–Shapley algorithm).
+- **`?min_score=`** and an option to show near misses on demand.
 
 ---
 
-## Quick start
+## For developers
 
 ```bash
-# 1. Database (Postgres on 127.0.0.1:5433)
-docker compose up -d db
-
-# 2. Dependencies
+docker compose up -d db                     # Postgres on 127.0.0.1:5433
 python -m venv .venv
-.venv/Scripts/python -m pip install -r requirements.txt -r requirements-dev.txt   # on macOS/Linux: .venv/bin/python
-
-# 3. Schema: apply the migrations once, in order, to the empty database
-for f in migrations/*.sql; do docker compose exec -T db psql -v ON_ERROR_STOP=1 -U recruiter -d recruiter_bot < "$f"; done
-
-# 4. Seed data: 15 candidates, 6 jobs, the taxonomy, and all matches
+.venv/Scripts/python -m pip install -r requirements.txt -r requirements-dev.txt   # macOS/Linux: .venv/bin/python
+.venv/Scripts/python -m recruiter_bot.migrate
 .venv/Scripts/python -m recruiter_bot.seed
-
-# 5. API, with interactive docs at http://127.0.0.1:8000/docs
 .venv/Scripts/python -m uvicorn recruiter_bot.api.main:app --reload
-```
-
-The connection defaults to `postgresql://recruiter:recruiter@127.0.0.1:5433/recruiter_bot`; set `DATABASE_URL` to override it.
-
----
-
-## Tests
-
-```bash
 .venv/Scripts/python -m pytest -q
 ```
 
-They cover normalization, ingestion validation, the taxonomy, credit and coverage, the score formula, and pinned rankings for all six jobs. The database tests skip when Postgres isn't running.
-
-For a single ranking in the terminal:
-
-```bash
-.venv/Scripts/python -m recruiter_bot.show_matches job 1
-```
-
----
-
-## Layout
-
-```
-migrations/        hand-written DDL, applied in order
-seed/              candidates, jobs and the taxonomy (JSON)
-recruiter_bot/
-  ingest/          validation, normalization, inserts, taxonomy loading
-  matching/        credit, coverage, scoring, ranking, stored matches
-  api/             FastAPI routes and response models
-  seed.py          python -m recruiter_bot.seed
-tests/
-DECISION.md        every decision, with its reasoning
-```
+Raw, hand-written SQL only: psycopg 3, with no ORM or query builder. The schema is in [`migrations/`](migrations/); the reasoning for every choice is in [DECISION.md](DECISION.md).

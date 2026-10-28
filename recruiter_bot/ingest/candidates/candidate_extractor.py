@@ -17,6 +17,8 @@ class CandidateInput(BaseModel):
     availability: str = Field(min_length=1)
     traits: list[str] = []
     quirk: str | None = None
+    # Roles the candidate wants, e.g. "Backend Engineer". Stored, not yet used in matching (D-47).
+    job_preferences: list[str] = []
 
 
 @dataclass(frozen=True)
@@ -29,6 +31,7 @@ class CandidateRecord:
     quirk: str | None
     skill_slugs: list[str]
     trait_slugs: list[str]
+    job_preference_slugs: list[str]
     payload: Any
 
 
@@ -79,5 +82,6 @@ def _build_candidate_record(raw_candidate: Any, today: date) -> CandidateRecord:
         quirk=candidate.quirk,
         skill_slugs=normalize_list(candidate.skills, "skill"),
         trait_slugs=normalize_list(candidate.traits, "trait"),
+        job_preference_slugs=normalize_list(candidate.job_preferences, "job preference"),
         payload=raw_candidate,
     )

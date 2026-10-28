@@ -9,6 +9,7 @@ from recruiter_bot.ingest.jobs.job_creator import JobExists, JobRejected
 from recruiter_bot.ingest.record_errors import RecordError
 from recruiter_bot.ingest.text_normalizer import normalize_list, normalize_required
 from recruiter_bot.ingest.vocabulary_writer import resolve_skill_ids, resolve_trait_ids
+from recruiter_bot.ingest.taxonomy.term_linker import link_record_terms
 from recruiter_bot.matching.match_store import refresh_job_matches
 
 REQUIRED_FIELDS = ("title", "required_skills", "min_experience_years")
@@ -109,6 +110,8 @@ def update_job(conn: psycopg.Connection, job_id: int, patch: JobPatch, source: s
 
         log_accepted(conn, "job", source, [slug or current_slug], [_payload(job_id, sent)])
         # Same transaction, so nobody sees the new job with old matches (D-37).
+        # Unknown words are linked first, so this record's matches already use the links (D-41).
+        link_record_terms(conn, skill_slugs, culture_slugs)
         refresh_job_matches(conn, job_id)
 
 
