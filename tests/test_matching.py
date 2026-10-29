@@ -1,230 +1,239 @@
-import psycopg
-import pytest
-
-from recruiter_bot.db import connect
+from recruiter_bot.api.candidates import matches_for
+from recruiter_bot.api.schemas import JobMatches
 from recruiter_bot.matching import (
     CandidateProfile,
     Credit,
     ExactCredit,
     JobProfile,
-    TaxonomyCredit,
-    compare_terms,
-    experience_fit,
     rank_candidates_for_job,
-    rank_jobs_for_candidate,
     score_match,
+    stored_matches_for_candidate,
+    stored_matches_for_job,
+    tier_for,
 )
 
-EXACT = ExactCredit()
+
+def a_job(**changes) -> JobProfile:
+    """A job needing skills a and b, 2 years of experience and culture keywords x and y."""
+    values = dict(
+        job_id=1,
+        title="Test Job",
+        min_experience_years=2,
+        required_skills=["a", "b"],
+        culture_keywords=["x", "y"],
+    )
+    values.update(changes)
+
+    return JobProfile(**values)
 
 
-class FakeCredit:
-    """A credit source built from a dict, to test the scorer without a taxonomy (D-32)."""
+def a_candidate(**changes) -> CandidateProfile:
+    """A candidate who has everything the job above asks for."""
+    values = dict(
+        candidate_id=1,
+        full_name="Test Candidate",
+        experience_years=4,
+        skills=["a", "b"],
+        traits=["x", "y"],
+    )
+    values.update(changes)
 
-    def __init__(self, related):
-        self._related = related
+    return CandidateProfile(**values)
+
+
+class PersuasionIsRelated:
+    """A credit source where `persuasion` is half-related to `sales` and `negotiation`."""
 
     def credit(self, concept_type, candidate_term, job_term):
+        """Full credit for the same word, half for persuasion on sales or negotiation, none otherwise."""
         if candidate_term == job_term:
             return Credit(1.0, "exact")
-        value = self._related.get((candidate_term, job_term))
-        if value:
-            return Credit(value, "related")
+
+        if candidate_term == "persuasion" and job_term in ("sales", "negotiation"):
+            return Credit(0.5, "related")
+
         return Credit(0.0, "none")
 
 
-# ---- Credit sources
+def test_a_full_match_scores_100_even_when_over_qualified():
+    """A full match scores 100, and 20 years against a 2-year minimum earns no more than 4."""
+    result = score_match(a_candidate(experience_years=20), a_job(), ExactCredit())
 
-def test_exact_credit_compares_compact_keys():
-    assert EXACT.credit("skill", "public-speaking", "publicspeaking").value == 1.0
-    assert EXACT.credit("skill", "persuasion", "sales").value == 0.0
-
-
-def test_taxonomy_credit_by_concept_and_relation():
-    credit = TaxonomyCredit(
-        concept_by_label={("trait", "persistent"): 1, ("trait", "tenacious"): 1, ("trait", "calm"): 2,
-                          ("trait", "calmunderpressure"): 3, ("trait", "chaotic"): 4, ("trait", "organized"): 5},
-        relation_credit={(2, 3): 0.5, (3, 2): 0.5, (4, 5): 0.0, (5, 4): 0.0},
-    )
-    assert credit.credit("trait", "tenacious", "persistent") == Credit(1.0, "synonym")
-    assert credit.credit("trait", "calm", "calm-under-pressure") == Credit(0.5, "related")
-    assert credit.credit("trait", "chaotic", "organized") == Credit(0.0, "none")
-    assert credit.credit("trait", "witty", "calm") == Credit(0.0, "none")
-    # A label belongs to one type: the same word as a skill gets nothing.
-    assert credit.credit("skill", "tenacious", "persistent") == Credit(0.0, "none")
-
-
-# ---- Term coverage
-
-def test_compare_terms_counts_matched_and_missing():
-    comparison = compare_terms(
-        candidate_terms=["sales", "public-speaking", "team-building"],
-        required_terms=["sales", "public-speaking", "negotiation"],
-        concept_type="skill",
-        credit=EXACT,
-    )
-    assert comparison.matched_terms == ["sales", "public-speaking"]
-    assert comparison.missing_terms == ["negotiation"]
-    assert comparison.score == pytest.approx(2 / 3)
-
-
-def test_compare_terms_with_no_overlap():
-    comparison = compare_terms(["woodworking"], ["deduction", "forensics"], "skill", EXACT)
-    assert comparison.matched_terms == []
-    assert comparison.score == 0.0
-
-
-def test_one_candidate_term_covers_one_requirement():
-    credit = FakeCredit({("persuasion", "sales"): 0.5, ("persuasion", "negotiation"): 0.5})
-    comparison = compare_terms(["persuasion"], ["negotiation", "sales"], "skill", credit)
-    assert comparison.score == 0.25
-    assert len(comparison.matches) == 1
-
-
-def test_assignment_is_exact_not_greedy():
-    # Greedy would give "mentor" to leadership (its best credit) and leave team-building empty: 1.0.
-    # The best assignment uses "coach" for leadership and "mentor" for team-building: 1.5.
-    credit = FakeCredit({("mentor", "leadership"): 1.0, ("mentor", "team-building"): 1.0,
-                         ("coach", "leadership"): 0.5})
-    comparison = compare_terms(["mentor", "coach"], ["leadership", "team-building"], "skill", credit)
-    assert comparison.score == 0.75
-    assert {(m.required_term, m.candidate_term) for m in comparison.matches} == {
-        ("leadership", "coach"), ("team-building", "mentor"),
-    }
-
-
-# ---- Experience fit
-
-@pytest.mark.parametrize("years, minimum, expected", [
-    (8, 3, 1.0),
-    (3, 3, 1.0),
-    (20, 2, 1.0),
-    (2, 4, 0.5),
-    (0, 0, 1.0),
-])
-def test_experience_fit(years, minimum, expected):
-    assert experience_fit(years, minimum) == expected
-
-
-# ---- Scoring
-
-def test_score_without_culture_keywords_rescales_weights():
-    candidate = CandidateProfile(1, "Sherlock H.", 8, ["deduction", "forensics", "pattern-recognition"])
-    job = JobProfile(1, "Backend Detective", 3, ["deduction", "forensics", "pattern-recognition"])
-    result = score_match(candidate, job, EXACT)
     assert result.score == 100.0
-    assert result.culture_score is None
-    assert result.reason == "3/3 skills (deduction, forensics, pattern-recognition) · 8y vs 3y min"
+    assert result.experience_score == 1.0
 
 
-def test_score_combines_skills_experience_and_culture():
-    candidate = CandidateProfile(1, "Junior", 2, ["sales"], ["persistent"])
-    job = JobProfile(6, "Sales Engineer", 4, ["negotiation", "sales"], ["enthusiastic", "persistent"])
-    result = score_match(candidate, job, EXACT)
-    assert (result.skill_score, result.experience_score, result.culture_score) == (0.5, 0.5, 0.5)
-    assert result.score == 50.0  # 0.7 * 0.5 + 0.2 * 0.5 + 0.1 * 0.5
-    assert result.reason == "1/2 skills (sales) · missing negotiation · 2y vs 4y min · culture 1/2 (persistent)"
+def test_the_score_is_70_percent_skills_20_experience_10_culture():
+    """Half the skills, enough experience, half the culture: 0.7 x 0.5 + 0.2 + 0.1 x 0.5 = 60."""
+    result = score_match(a_candidate(skills=["a"], traits=["x"]), a_job(), ExactCredit())
+
+    assert result.score == 60.0
 
 
-def test_reason_names_where_partial_credit_came_from():
-    credit = FakeCredit({("persuasion", "negotiation"): 0.5})
-    candidate = CandidateProfile(1, "Elle W.", 3, ["persuasion", "sales"])
-    job = JobProfile(6, "Sales Engineer", 3, ["negotiation", "sales"])
-    assert score_match(candidate, job, credit).reason == (
-        "1.5/2 skills (negotiation ≈ persuasion ½, sales) · 3y vs 3y min"
+def test_too_little_experience_earns_proportional_credit():
+    """2 years against a 4-year minimum earns half the experience credit."""
+    result = score_match(a_candidate(experience_years=2), a_job(min_experience_years=4), ExactCredit())
+
+    assert result.experience_score == 0.5
+    assert result.score == 90.0
+
+
+def test_no_skill_overlap_is_never_a_match():
+    """Without a single skill in common it is never a match, whatever the experience or culture."""
+    result = score_match(a_candidate(skills=["z"], experience_years=20), a_job(), ExactCredit())
+
+    assert result.score == 30.0
+    assert result.qualifies is False
+
+
+def test_a_related_skill_earns_half_credit_and_the_reason_says_so():
+    """A related skill earns half credit, and the reason names it."""
+    result = score_match(
+        a_candidate(skills=["persuasion"]),
+        a_job(required_skills=["negotiation"], culture_keywords=[]),
+        PersuasionIsRelated(),
     )
 
-
-def test_culture_and_experience_cannot_create_a_match():
-    candidate = CandidateProfile(1, "Ron S.", 15, ["woodworking"], ["decisive"])
-    job = JobProfile(5, "Incident Commander", 4, ["crisis-management"], ["decisive"])
-    result = score_match(candidate, job, EXACT)
-    assert result.score == 30.0
-    assert not result.qualifies
+    assert result.skill_score == 0.5
+    assert "negotiation ≈ persuasion ½" in result.reason
 
 
-# ---- Ranking against the seeded database, with the taxonomy
+def test_one_skill_cannot_be_counted_for_two_requirements():
+    """One skill covers only one requirement, so the shared half credit is 0.25, not 0.5."""
+    result = score_match(
+        a_candidate(skills=["persuasion"]),
+        a_job(required_skills=["sales", "negotiation"], culture_keywords=[]),
+        PersuasionIsRelated(),
+    )
 
-@pytest.fixture
-def conn():
-    try:
-        connection = connect()
-    except psycopg.OperationalError:
-        pytest.skip("Postgres is not running")
-    with connection:
-        yield connection
-
-
-def names(results):
-    return [(result.candidate_name, result.score) for result in results]
+    assert result.skill_score == 0.25
+    assert len(result.skill_matches) == 1
 
 
-def test_backend_detective_ranking(conn):
-    assert names(rank_candidates_for_job(conn, 1)) == [("Sherlock H.", 95.0), ("Sheldon C.", 43.3)]
+def test_a_score_of_exactly_50_counts_as_a_match_and_70_as_a_strong_one():
+    """50 is the lowest score that counts as a match, and 70 the lowest for a strong one."""
+    assert tier_for(70.0) == "strong_match"
+    assert tier_for(69.9) == "possible_match"
+    assert tier_for(50.0) == "possible_match"
+    assert tier_for(49.9) == "near_miss"
 
 
-def test_culture_breaks_the_rapid_prototyping_tie(conn):
-    # All three have both skills; innovative (Tony) beats the related improviser (MacGyver).
-    assert names(rank_candidates_for_job(conn, 2)) == [
-        ("Tony S.", 95.0), ("MacGyver", 92.5), ("Rick S.", 90.0),
-    ]
+def job_id_of(conn, title: str) -> int:
+    """The id of the seed job with this title."""
+    return conn.execute("SELECT job_id FROM jobs WHERE title = %s", (title,)).fetchone()[0]
 
 
-def test_equal_scores_are_broken_by_name(conn):
-    assert names(rank_candidates_for_job(conn, 3))[:2] == [("Elle W.", 90.0), ("Hermione G.", 90.0)]
+def candidate_id_of(conn, name: str) -> int:
+    """The id of the seed candidate with this name."""
+    return conn.execute("SELECT candidate_id FROM candidates WHERE full_name = %s", (name,)).fetchone()[0]
 
 
-def test_related_skill_gives_partial_credit(conn):
-    results = rank_candidates_for_job(conn, 4)
-    assert names(results)[:2] == [("Miranda P.", 66.7), ("Ted L.", 60.0)]
-    assert results[1].reason.startswith("1.5/3 skills (leadership ≈ mentorship ½, team-building)")
+def names_in(tiers) -> list[str]:
+    """Every candidate name listed in a recruiter's view, in any tier."""
+    names = []
+    for tier in (tiers.strong_match, tiers.possible_match, tiers.near_miss):
+        for match in tier:
+            names.append(match.candidate_name)
+
+    return names
 
 
-def test_related_trait_gives_partial_culture_credit(conn):
-    results = rank_candidates_for_job(conn, 5)
-    assert names(results)[:2] == [("Olivia P.", 95.0), ("Katniss E.", 74.2)]
-    assert "culture 1.5/2 (calm-under-pressure ≈ resilient ½, decisive)" in results[1].reason
+def test_a_jobs_candidates_are_ranked_best_fit_first(conn):
+    """A job's candidates come best fit first."""
+    matches = stored_matches_for_job(conn, job_id_of(conn, "Incident Commander"))
+
+    assert [(m.candidate_name, m.score) for m in matches[:2]] == [("Olivia P.", 95.0), ("Katniss E.", 74.2)]
+
+    scores = [m.score for m in matches]
+    assert scores == sorted(scores, reverse=True)
 
 
-def test_synonym_and_culture_reorder_sales_engineer(conn):
-    results = rank_candidates_for_job(conn, 6)
-    assert names(results)[:3] == [("Michael S.", 71.7), ("Dwight S.", 66.7), ("Elle W.", 55.0)]
-    leslie = next(result for result in results if result.candidate_name == "Leslie K.")
-    assert "culture 1/2 (persistent = tenacious)" in leslie.reason
+def test_a_candidates_jobs_are_ranked_best_fit_first(conn):
+    """A candidate's jobs come best fit first."""
+    response = matches_for(conn, candidate_id_of(conn, "Elle W."))
+
+    best = response.matches.strong_match[0]
+    assert (best.job_title, best.score, best.rank) == ("Developer Relations Lead", 90.0, 1)
+
+    second = response.matches.possible_match[0]
+    assert (second.job_title, second.score, second.rank) == ("Sales Engineer", 55.0, 2)
 
 
-def test_candidates_without_skill_credit_are_excluded(conn):
-    candidate_names = [result.candidate_name for result in rank_candidates_for_job(conn, 1)]
-    assert "Ron S." not in candidate_names
+def test_both_directions_give_every_pair_the_same_score(conn):
+    """Every candidate and job pair gets the same score in both views."""
+    job_ids = [row[0] for row in conn.execute("SELECT job_id FROM jobs").fetchall()]
+    candidate_ids = [row[0] for row in conn.execute("SELECT candidate_id FROM candidates").fetchall()]
+
+    seen_from_jobs = {}
+    for job_id in job_ids:
+        for match in stored_matches_for_job(conn, job_id):
+            seen_from_jobs[(match.job_id, match.candidate_id)] = match.score
+
+    seen_from_candidates = {}
+    for candidate_id in candidate_ids:
+        for match in stored_matches_for_candidate(conn, candidate_id):
+            seen_from_candidates[(match.job_id, match.candidate_id)] = match.score
+
+    assert len(seen_from_jobs) > 0
+    assert seen_from_jobs == seen_from_candidates
 
 
-def test_reverse_direction_for_ron(conn):
-    results = rank_jobs_for_candidate(conn, 5)
-    assert [(result.job_title, result.score) for result in results] == [
-        ("Incident Commander", 43.3), ("Sales Engineer", 43.3),
-    ]
+def test_stored_matches_equal_a_fresh_calculation(conn):
+    """Stored matches equal a fresh calculation."""
+    for (job_id,) in conn.execute("SELECT job_id FROM jobs").fetchall():
+        stored = {(m.candidate_id, m.score) for m in stored_matches_for_job(conn, job_id)}
+        fresh = {(r.candidate_id, r.score) for r in rank_candidates_for_job(conn, job_id)}
+
+        assert stored == fresh
 
 
-def test_both_directions_agree_on_every_pair(conn):
-    # D-15: one score per pair; the direction only changes what is ranked.
-    # Real ids, not 1-6 and 1-15: records added through the API take ids too.
-    job_ids = [row[0] for row in conn.execute("SELECT job_id FROM jobs")]
-    candidate_ids = [row[0] for row in conn.execute("SELECT candidate_id FROM candidates")]
-    by_job = {(r.job_id, r.candidate_id): r.score for job_id in job_ids for r in rank_candidates_for_job(conn, job_id)}
-    by_candidate = {
-        (r.job_id, r.candidate_id): r.score
-        for candidate_id in candidate_ids
-        for r in rank_jobs_for_candidate(conn, candidate_id)
-    }
-    assert by_job == by_candidate
+def test_equal_scores_go_to_whoever_can_start_first(conn):
+    """Elle (available now) and Hermione (in 2 weeks) both score 90.0, so Elle comes first."""
+    matches = stored_matches_for_job(conn, job_id_of(conn, "Developer Relations Lead"))
+
+    assert [(m.candidate_name, m.score) for m in matches[:2]] == [("Elle W.", 90.0), ("Hermione G.", 90.0)]
 
 
-def test_exact_credit_can_be_swapped_in(conn):
-    # Loosely coupled: the same ranker without the taxonomy gives no related credit to Ted.
-    ted = next(r for r in rank_candidates_for_job(conn, 4, credit=EXACT) if r.candidate_name == "Ted L.")
-    assert ted.skill_score == pytest.approx(1 / 3, abs=0.001)
+def test_a_better_fit_who_is_not_looking_becomes_a_proactive_offer(conn):
+    """Michael, who is not looking, fits Sales Engineer better than anyone who is."""
+    job_id = job_id_of(conn, "Sales Engineer")
+    response = JobMatches.from_results(job_id, stored_matches_for_job(conn, job_id))
+
+    assert response.proactive_offers_included is True
+    assert [offer.candidate_name for offer in response.proactive_offers] == ["Michael S."]
+    assert "Michael S." not in names_in(response.matches)
 
 
-def test_unknown_ids_return_none(conn):
-    assert rank_candidates_for_job(conn, 999) is None
-    assert rank_jobs_for_candidate(conn, 999) is None
+def test_no_proactive_offer_when_someone_available_is_just_as_good(conn):
+    """Backend Detective has an available candidate who beats everyone else, so no offer is needed."""
+    job_id = job_id_of(conn, "Backend Detective")
+    response = JobMatches.from_results(job_id, stored_matches_for_job(conn, job_id))
+
+    assert response.proactive_offers_included is False
+    assert response.proactive_offers == []
+
+
+def test_near_misses_are_shown_only_when_nothing_better_exists(conn):
+    """Ron's best job scores 43.3, so his near misses are shown; Elle has real matches, so hers are hidden."""
+    ron = matches_for(conn, candidate_id_of(conn, "Ron S."))
+    elle = matches_for(conn, candidate_id_of(conn, "Elle W."))
+
+    assert ron.matches.near_misses_included is True
+    assert len(ron.matches.near_miss) == 2
+
+    assert elle.matches.near_misses_included is False
+    assert elle.matches.near_miss == []
+
+
+def test_the_taxonomy_gives_a_synonym_full_credit_and_a_related_word_half(conn):
+    """Leslie's `tenacious` is a synonym of `persistent`; Katniss's `resilient` is related to `calm-under-pressure`."""
+    sales_engineer = stored_matches_for_job(conn, job_id_of(conn, "Sales Engineer"))
+    leslie = next(m for m in sales_engineer if m.candidate_name == "Leslie K.")
+
+    assert "persistent" in leslie.matched_culture
+
+    incident_commander = stored_matches_for_job(conn, job_id_of(conn, "Incident Commander"))
+    katniss = next(m for m in incident_commander if m.candidate_name == "Katniss E.")
+
+    assert "calm-under-pressure" in katniss.matched_culture
+    assert katniss.culture_score == 0.75

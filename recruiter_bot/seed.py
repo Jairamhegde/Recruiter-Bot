@@ -23,15 +23,16 @@ from recruiter_bot.matching import refresh_all_matches
 
 SEED_DIR = Path(__file__).resolve().parent.parent / "seed"
 
-EXISTING_CANDIDATE_SLUGS_SQL = "SELECT slug FROM candidates WHERE slug = ANY(%s)"
+EXISTING_CANDIDATE_KEYS_SQL = "SELECT source_key FROM candidates WHERE source_key = ANY(%s)"
 
-EXISTING_JOB_SLUGS_SQL = "SELECT slug FROM jobs WHERE slug = ANY(%s)"
+EXISTING_JOB_KEYS_SQL = "SELECT source_key FROM jobs WHERE source_key = ANY(%s)"
 
 
-def _not_yet_stored(conn, existing_slugs_sql: str, records: list) -> list:
-    slugs = [record.slug for record in records]
-    stored = {slug for (slug,) in conn.execute(existing_slugs_sql, (slugs,)).fetchall()}
-    return [record for record in records if record.slug not in stored]
+def _not_yet_stored(conn, existing_keys_sql: str, records: list) -> list:
+    """Seed records are recognised by their source key ('seed:<slug>'), not by name (D-53)."""
+    keys = [record.source_key for record in records]
+    stored = {key for (key,) in conn.execute(existing_keys_sql, (keys,)).fetchall()}
+    return [record for record in records if record.source_key not in stored]
 
 
 def run(today: date | None = None) -> None:
@@ -58,8 +59,8 @@ def run(today: date | None = None) -> None:
             conn.execute(INGEST_LOCK_SQL)
             # The seed only bootstraps: stored records are never overwritten, so edits made
             # through PATCH survive and availability dates don't restart (D-39).
-            new_candidates = _not_yet_stored(conn, EXISTING_CANDIDATE_SLUGS_SQL, candidate_extraction.records)
-            new_jobs = _not_yet_stored(conn, EXISTING_JOB_SLUGS_SQL, job_extraction.records)
+            new_candidates = _not_yet_stored(conn, EXISTING_CANDIDATE_KEYS_SQL, candidate_extraction.records)
+            new_jobs = _not_yet_stored(conn, EXISTING_JOB_KEYS_SQL, job_extraction.records)
             result = insert_batch(conn, build_candidate_batch(new_candidates), build_job_batch(new_jobs), source="seed")
             taxonomy_result = save_taxonomy(conn, taxonomy)
             # The reload removed every automatic label; the same rules recreate them (D-41).
@@ -83,6 +84,16 @@ def run(today: date | None = None) -> None:
 
 
 def _print_link_result(result: LinkResult) -> None:
+    if result.model_status == "on":
+        print(f"model linking: on ({len(result.suggested)} suggested links, {len(result.review)} words for review)")
+    else:
+        print(f"model linking: {result.model_status}, rules only ({result.model_reason})")
+    for link in result.suggested:
+        print(f"suggested {link.concept_type} {link.term} -> {link.concept}, capped credit ({link.evidence})")
+    for concept_type, term, suggestions in result.review:
+        print(f"for review: {concept_type} {term} might be {', '.join(suggestions)}")
+    for term, error in result.model_failed:
+        print(f"model linking skipped {term}: {error}")
     for link in result.links:
         print(f"linked {link.concept_type} {link.term} -> {link.concept} ({link.method}: {link.evidence})")
     for term, negates in result.negated:

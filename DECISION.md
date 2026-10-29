@@ -2,7 +2,7 @@
 
 The assumptions and design decisions behind this project, each with the reason for it.
 
-_Last updated: 2026-10-28_
+_Last updated: 2026-10-29_
 
 ---
 
@@ -48,6 +48,8 @@ _Amended by D-30:_ synonyms and related terms now live in a curated, ESCO-shaped
 
 **D-04. Records get integer ids plus a unique slug.**
 The source data has no ids. The slug (`sherlock-h`) lets repeated ingestion update existing rows instead of creating duplicates.
+
+*Superseded by D-53: names and titles are no longer unique; identity is an optional email, or company plus title.*
 
 **D-05. Availability is stored as two fields.**
 `open_to_opportunities` and `available_from DATE`. `Immediate` becomes (open, today), `2 weeks` becomes (open, today + 14), and `Not looking` becomes (not open, NULL). A CHECK constraint keeps the two consistent. Reason: the source mixes willingness to move with timing, and a date stays correct over time where "14 days from now" doesn't. "Today" comes from the database clock, so the result doesn't depend on the timezone of whoever runs the seed.
@@ -232,7 +234,7 @@ Two-sided hiring marketplaces optimise a different goal on each side. A recruite
 
 The formula, replacing D-28's:
 - **Skills (S):** credit earned ÷ required skills. The credit is 1.0 for the same term or the same concept, 0.5 for a related concept, and 0 otherwise (D-29).
-- **One-to-one:** each candidate skill covers at most one requirement, so `persuasion` can't earn half of both `sales` and `negotiation`. The best assignment is found exactly, not greedily.
+- **One-to-one:** each candidate skill covers at most one requirement, so `persuasion` can't earn half of both `sales` and `negotiation`. The best assignment is found exactly, not greedily (and in polynomial time since D-52).
 - **Experience (E):** as in D-28: 1.0 at or above the minimum, proportional below it.
 - **Culture (T):** the same coverage as skills, of the job's culture keywords by the candidate's traits. A job with no culture keywords leaves T out, and the other weights are rescaled.
 - **`score = round(100 × (0.7·S + 0.2·E + 0.1·T), 1)`.** Experience and culture keep their D-11 weights. Skills take availability's 0.1 until availability is scored.
@@ -368,6 +370,8 @@ Measured on the 630 candidate pairs of the calibration cases (27 synonyms agains
 - **Cost:** about 20–30 NLI checks per unknown word (10 candidates, 1–2 labels, both directions). That's 14 s for 63 calibration words, about 0.2 s per word.
 
 **D-45. Stage 6 suggests, it doesn't link: automatic linking failed its precision target on the test cases.**
+
+*Revised by D-54: confident links now earn capped "suggested" credit (0.25), never synonym credit.*
 The rule: take the candidate with the highest mutual entailment, and auto-link it only if its mutual entailment, its similarity, and its margin over the runner-up all clear a threshold. Otherwise send it to review with the top 3 suggestions, or call it no match.
 - **Calibration** (63 words, 616 settings tried, no wrong links allowed, then the most right ones): mutual entailment ≥ 0.50, similarity ≥ 0.86, margin ≥ 0.30. In words: one concept must clearly beat every other. Result: 7 right automatic links, 0 wrong.
 - **Test** (48 untouched words, run once with those thresholds): **8 right, 4 wrong, a precision of 67%,** against a target of 98%.
@@ -428,9 +432,42 @@ There are no hiring outcomes to learn weights from, so the next best evidence is
 
   With the chosen rule, the offers are Tony (Rapid Prototyping, 95.0 against 92.5), Miranda (Engineering Manager, 66.7 against 60.0) and Michael (Sales Engineer, 71.7 against 66.7).
 - **This answers the brief's planted contradiction:** "Michael Scott is applying to be a sales engineer", but the data says "Not looking". He is neither hidden nor ranked as if he could interview tomorrow: he's the one Sales Engineer worth an offer.
+- **`proactive_offers_included`** is always in the recruiter response: `true` when at least one candidate is worth a proactive offer, `false` when nobody who isn't looking beats the best open candidate. An empty `proactive_offers` list on its own can't say which, so a reader would have to guess the rule. It sits next to `near_misses_included` for the same reason, and it always equals `len(proactive_offers) > 0`; this was checked on every job. It's a response field, not a request option: the section is part of the answer, not something the caller asks for.
 - **Near misses** (below 50) appear only when there is no strong or possible match, as D-17 decided, and then at most 3, best first. They explain what's missing; next to real matches they're noise. A `near_misses_included` flag says whether they're there, and the `near_miss` key is always present, so the shape never changes. This applies to the candidate's view too: Ron, whose best job scores 43.3, sees two near misses, while Elle sees none.
 - **Unchanged:** scores, stored matches and the sensitivity results. This only decides which section a match goes into. The candidate's view has no passive split, since the candidate is always the same person.
 - **Not built:** `?include_near_misses=true` to see them anyway, and `?min_score=`.
+
+**D-50. Every match carries its rank and the evidence behind its score.**
+A score is only useful if a recruiter can see what it's based on, so each entry has:
+- **`rank`:** its position, 1 being the best. It runs across the tiers within `matches`; proactive offers are ranked among themselves.
+- **`evidence`, the default:** for skills and culture, only what was **matched** and what is **missing**; for experience, which has no list of terms, one sentence (`"11 years, meets the 3-year minimum"`). Nothing else. It's the same on the recruiter's and the candidate's endpoint.
+- **`score` and `reason`** stay on the entry, as the brief asks: "a score and a short reason".
+
+- **`score_breakdown`, only with `?explain=true`:** for skills, experience and culture: the factor's score, its weight, the **points** it adds (100 × weight × score), a sentence, and what matched and is missing. **The points add up to the score:** Michael for Sales Engineer is 46.7 + 20.0 + 5.0 = 71.7. This was checked on every entry of every view: 44 entries, all exact. For a job with no culture keywords, the weights shown are the rescaled 0.778 / 0.222.
+- **Why compact by default:** the numbers suit an audit of one candidate, not a list of many. The weight is the same on every entry, and a reader acts on *what matched and what is missing* ("ask about negotiation"), not on 46.7 points. This is the progressive-disclosure pattern production systems use: a short answer, the full detail on request.
+- **How it's built:** `?explain=true` is an optional query parameter of `GET /jobs/{id}/matches` and `GET /candidates/{id}/matches`. Without it, `score_breakdown` isn't sent at all, rather than sent as `null`. Scores, ranks and order are identical either way, as checked on every endpoint. POST and PATCH always return the compact view, and a value that isn't a boolean returns 422.
+- **Stored, not parsed:** matched and missing culture keywords are now stored with each match, like skills (migration 007). The reason text is never read back. `ALGORITHM_VERSION` went to 3, so every stored match is recomputed once (D-37).
+- **Simpler entries:** the flat `skill_score`, `matched_skills` and similar fields moved into `evidence`, so nothing is duplicated.
+- **The quirk stays a shown detail,** next to the evidence and never inside it (D-06). Scoring jokes was rejected on evidence: the model step reached only 67% precision even on plain words (D-45).
+
+**D-51. A candidate's jobs are ordered by fit, then preference, then their chance of getting the job.**
+`GET /candidates/{id}/matches`, and the candidate `POST` and `PATCH` responses, order jobs by:
+1. **Score:** the fit, the same number the recruiter sees (D-15).
+2. **Preference:** jobs whose title is one of the candidate's `job_preferences` come first (D-47).
+3. **Standing:** the share of rivals the candidate beats.
+4. **Posting date,** newest first.
+5. **The neutral hash** of the job and candidate ids (D-16).
+
+- **Standing:** a rival is another candidate with a strong or possible match (50 or more) for the same job **who is open to opportunities**, since someone not looking isn't competing for the role now.
+  - **Calculation:** `(rivals below + ½ × rivals level) ÷ all rivals`, or 100% with no rivals. One query computes it for all of a candidate's jobs.
+  - **Example:** Elle beats 88% of rivals for Developer Relations (3 below, Hermione level). Ted is the top applicant for Engineering Manager (60.0): Miranda scores higher but isn't looking.
+  - **Why it separates tied jobs:** the tie is the candidate's *own* score for two jobs. Standing compares that score with the *other* candidates for each job, a different group per job. With 70 for both Job A and Job B, one rival at 90 for Job A gives 0%, and two rivals at 55 for Job B give 100%, so Job B comes first. Only the total score is compared, since it already combines skills, experience and culture with the agreed weights. Comparing the parts separately would contradict that weighting.
+  - **When it doesn't separate them:** when the candidate's position is also the same in both pools. Ron scores 43.3 for both his jobs, with 2 rivals above and none below in each, so 0% in both. The posting date and then the hash decide.
+- **Why standing comes after the score, never first:** score measures fit; standing measures competition. Sorting by standing first would put a weak-fit job with few rivals (52, nobody else) above a strong-fit one (90, three rivals), steering candidates toward the jobs they fit worst. It also changes whenever someone joins, so as a first key the whole list would keep reshuffling.
+- **Privacy:** the exact share is used only for ordering. The response shows `top_applicant` (no rival scores higher, like LinkedIn's badge) and `matches_preference`. A percentage in a pool of three would reveal other candidates' scores.
+- **The posting date** (`jobs.created_at`) comes late on purpose. Older ads are more likely to be filled, but every seed job was posted the same day, and companies repost ads to look fresh, so it decides almost nothing here.
+- **Verified:** with a preference for Sales Engineer added in a rolled-back transaction, Ron's two jobs tied at 43.3 swapped, Sales Engineer first. Without one, his equal standing (0% in both) falls through to the date, then the hash.
+- **The production direction:** a learned model of the chance of getting hired would replace these hand-ordered steps, once there's outcome data. Until then, the steps are transparent and each answers a question the candidate has.
 
 **D-34. Every qualifying match is labelled with a tier.**
 | Tier | Score | Meaning for the recruiter |
@@ -443,6 +480,196 @@ There are no hiring outcomes to learn weights from, so the next best evidence is
 - **50 counts as a match,** as D-17 sets it. The thresholds are named constants (`STRONG_MATCH_SCORE`, `MATCH_SCORE`), so a change is one line.
 - **Rankers still return one sorted list,** with the tier on each result, so no result is dropped and both directions answer in the same shape. Grouping happens where results are shown: the API groups them into three lists, and `show_matches` prints the tier on each line.
 - **Not yet:** the `?min_score=` filter and the limit of three near misses from D-17. Every near miss is listed for now.
+
+**D-52. The best skill pairing is found by the Hungarian algorithm, not by trying every combination.**
+D-32 pairs each candidate skill with at most one requirement so that the total credit is highest. The first implementation tried every combination, which is exact but grows exponentially. Measured on synthetic jobs where each candidate skill is related to a few requirements:
+
+| Required skills | Candidate skills | Exhaustive search | Hungarian |
+|---|---|---|---|
+| 8 | 25 | 5 s | 0.2 ms |
+| 10 | 25 | 109 s | 0.3 ms |
+| 12 | 25 | did not finish | 0.3 ms |
+| 40 | 80 | not run | 3.8 ms |
+
+- **Why it mattered:** matches are computed at write time, inside a transaction that holds the ingest lock, so one slow job would freeze every other write. It was invisible on the seed data, where jobs list 2–3 skills and the taxonomy has few relations. Real postings list 8–20 skills, and a larger taxonomy makes credit denser.
+- **Same answers:** the new code was compared with the old search, loaded from git, on all 272 real candidate-and-job pairs and on 20,000 random tie-heavy cases. The total credit, the pairing, the matched and the missing terms were identical in every one. Refreshing all 37 stored matches changed none of them, so `ALGORITHM_VERSION` stays 3.
+- **Ties are settled by a stated rule,** the one the old search happened to follow, now encoded in the weights (`term_matcher.py`): requirement by requirement from the first, leave it unpaired if that loses nothing, otherwise take the term with the most credit, then the alphabetically first. For example, Elle's `persuasion` is equally related to `negotiation` and `sales`, and goes to `sales`, the later one: the evidence reads `sales ≈ persuasion ½ · missing negotiation`. The score is the same either way; only which requirement is named missing depends on the rule.
+- **Not a library:** `scipy.optimize.linear_sum_assignment` solves the same problem, but pulls in a large dependency for about 70 lines, and its tie handling can't be controlled.
+- **Where it lives:** `matching/assignment.py` is a plain maximum-weight assignment on whole numbers, knowing nothing about skills. `term_matcher.py` turns credits into weights and reads the answer back.
+
+**D-53. Names and titles aren't unique: identity is an optional email for candidates, and company plus title for jobs.**
+D-04 made the normalized name the identity, because the data has no email or id. That stops two people with the same name from both being stored, which is wrong for real people. Migration 008 changes it:
+
+| | Before | Now |
+|---|---|---|
+| Candidate identity | `UNIQUE (slug)`, the name | `email`, optional, `UNIQUE` when present, stored in lower case |
+| Job identity | `UNIQUE (slug)`, the title | `company`, optional, with `UNIQUE (lower(company), slug)`: one title per company |
+| How the writers and the seed recognise a record | the slug | `source_key`, always filled and unique: `seed:<slug>` for seed records, `api:<random id>` for API records |
+
+- **NULL is allowed and never clashes.** A primary key can't be NULL, so the primary key stays `candidate_id` / `job_id`. `UNIQUE` treats every NULL as different, so the 15 seed candidates without email, and two "Alex Kim"s, are all allowed, while the same email twice is refused.
+- **What returns `409` now:**
+  - a candidate whose email is already used, in any letter case;
+  - a job whose title already exists at the same company, in any letter case;
+  - the same, through a PATCH.
+  - A repeated name, or a repeated title with no company, is accepted.
+- **The cost, stated honestly:** while email is missing, the same person posted twice can't be detected; there is nothing to compare. The same goes for a job with no company. That's a limit of the data, not a rule the code can supply.
+- **Why `source_key`:** the batch writer linked skills to records by slug, which would mix up two people with the same name. Seed keys come from the name, so rerunning the seed still adds nobody twice; API keys are random. Existing rows got `seed:<slug>` in the migration, since their slugs were unique under the old rule.
+- **Shown, never scored:** `email` in the candidate list, `company` in the job list and in a candidate's job matches, so namesakes and same-title jobs can be told apart. Matching uses ids only, so no score changed.
+- **Verified** on a throwaway database, 17 checks: seeding twice gives 15 and 6; namesakes are separate records with their own matches; email clashes are refused in any case, and by the database itself as a backstop; same title is refused at the same company, allowed at another or with none; PATCH follows the same rules; `email: null` clears it. The 16 tests pass.
+
+**D-54. Words the rules can't place go to an optional model stage, which can only add capped "suggested" credit.**
+D-45 kept the models out because a confident link counted as a full synonym, and only 8 of 12 test links were. Re-scored with the credit a guess deserves, 11 of the 12 were acceptable: 8 synonyms, plus 3 related words linked to the right concept. So the models now run inside ingestion, at a strength that matches their measured reliability:
+
+| | Credit | Who decides |
+|---|---|---|
+| Same word, synonym (curated) | 1.0 | the taxonomy |
+| Related concept (curated) | 0.5 | the taxonomy |
+| **Suggested by the model** | **0.25** | **the model, until a person reviews it** |
+
+- **Order:** exact label → negation → word roots → typos → grouping (the rules, D-41) → **the model stage**, only for words still unplaced. Negated words never reach it.
+- **The model stage** is the existing D-43 to D-45 pipeline: the embedding model finds the 10 closest concepts, NLI checks each in both directions, and the calibrated thresholds decide:
+  - **confident:** stored as `linked`; the word earns 0.25 toward that concept;
+  - **plausible:** stored as `review`, with up to 3 suggestions, for a person to decide;
+  - **neither:** no row; the word stays unknown, as before.
+- **Guards:**
+  - **A guess never creates a match on its own.** At least one required skill must match through the taxonomy itself, so the one wrong confident link in the evaluation (`pattern-making` → pattern-recognition) can't put anyone on a list.
+  - **One guess per pair:** two unknown words suggested to the same concept earn nothing, and a suggestion never travels through a relation.
+  - **Labelled:** the reason reads `crisis-management ≈ crisis-handling (suggested ¼)`.
+  - **Auditable:** every row in `term_suggestions` keeps the model scores behind it and the model version. `GET /taxonomy/suggestions` lists the linked words and the review queue, and says whether the models are running.
+  - **Reproducible:** the curated taxonomy file is the index, never the automatic labels, so one guess can't build on another; every seed run recomputes all decisions.
+- **Fallback, never failure.** Ingestion carries on with the rules alone when:
+  - `MODEL_LINKING=off` is set (the tests use this, so they don't depend on model files);
+  - the libraries or model files are missing, or a model fails to load (remembered for the process);
+  - one word fails in the model (only that word is skipped);
+  - storing a suggestion fails: every database step runs in its own savepoint, so the POST, PATCH or seed that called it still commits.
+- **Docker: off by default.** A plain `docker compose up --build` builds a rules-only image (230 MB) with no download, so the first run doesn't depend on Hugging Face or a 125 MB fetch. `WITH_MODELS=true docker compose up --build` installs `requirements-linking.txt` and downloads the two pinned, hash-checked models (a 698 MB image). If that download fails, the build still succeeds and the API runs rules-only. Both builds were run and checked: the default reports `model linking: unavailable, rules only` and serves matches; the model build reports `on`.
+- **Verified** on a throwaway database, 12 checks:
+  - the seed with the models on gives scores identical to the seed with them off;
+  - `crisis-handling` and `calm-under-stress` earn ¼ each and are labelled;
+  - a candidate whose only skill is a suggested one gets no match;
+  - off, missing libraries, a failing word, and a write rejected by Postgres all leave the POST succeeding.
+
+  On the seed data the models link nothing: all 13 unknown words fall below the thresholds and go to review. That's the thresholds working; some suggestions are poor (`fast-paced` → enthusiasm).
+- **Cost:** about 2 s to load the models once per process, and 0.2 s per new unknown word, paid at write time, never when reading matches.
+- **`ALGORITHM_VERSION` is 4,** because credit rules changed; stored matches are recomputed on startup.
+- **Still honest about the limits:** the 0.25 cap rests on 12 confident test links, which is promising, not proven; and two unknown words aren't compared with each other, so `customer-handling` vs `customer-management` still earn nothing.
+- **Scaling path:** the same three stages with ESCO's 13,000+ skills as the index (vectors in Postgres with `pgvector`), an embedding model fine-tuned on ESCO's own synonym pairs, and every review decision becoming a new labelled example.
+
+**D-55. Unknown words are handled by a learning loop: real ESCO labels, the rules, the optional models, and a person's decision, which the system keeps.**
+Until now the taxonomy had ESCO's *shape* but almost none of its content: 51 main names, 2 synonyms and 1 misspelling. An earlier README line said every concept had synonyms; that was wrong, and it is corrected.
+
+- **Real ESCO labels, extracted, not the full dataset.** This is a prototype, so only the ESCO records it maps to are kept, in `seed/esco_snapshot.json` (46 KB, CC BY 4.0, (c) European Union):
+  - 32 of our 51 concepts were mapped by reviewing ESCO's search results, definitions and labels; the top search hit was often wrong (`deduction` → "specialised astrology software", `negotiation` → "perform political negotiation");
+  - 19 have no ESCO equivalent: personality words ESCO doesn't model (`blunt`, `reckless`…), and skills ESCO only has in sector versions (`negotiation` for land, insurance or politics);
+  - `python -m recruiter_bot.linking.esco_import` adds the labels to `seed/taxonomy.json`. It's deterministic, and a second run adds nothing. Labels that aren't true synonyms were left out, each with its reason (`show positive attitude` is optimism, not enthusiasm; `lead` alone is ambiguous), and a label two concepts would claim is left out of both;
+  - **the result: from 3 synonyms and misspellings to 236.** ESCO has almost no misspellings (its hidden labels were empty), so typos still come from the D-41 typo rule.
+  - **Seed scores: none changed.** Two records added by hand did: `critical-thinking` now links to deduction ("think critically" is an ESCO synonym of logical reasoning), and the model now links `prototyping` to rapid-prototyping.
+- **Why not train a classifier on this data.** A classifier needs a class per concept and retraining whenever concepts change; most concepts have 3–12 ESCO labels, personality words have none; and it always picks *some* class, while "I don't know" is the case that matters. Production entity linkers keep the knowledge in data and the models frozen. So here, learning means adding a label:
+
+  ```
+  unknown word → 1. known label (curated, ESCO, approved)  → full credit
+               → 2. rules: negation, word roots, typos      → full credit
+               → 3. optional models (D-54)                  → ¼ credit, or the review queue
+               → 4. a person: approve / reject              → approved: full credit from now on
+  ```
+- **The learning loop (migration 010, two endpoints):**
+  - `POST /taxonomy/suggestions/{type}/{term}/approve` with `{"concept": "<slug>"}`, or no body to accept the model's best concept. The word becomes a synonym (credit 1.0) for every record, now and later, and survives every reseed.
+  - `POST /taxonomy/suggestions/{type}/{term}/reject`: the word loses any suggested credit and is never suggested again.
+  - Both refresh every affected match in the same transaction.
+  - They refuse a word nobody uses (404), a word that is already a label (409), and an unknown concept or type (422).
+  - **There's no login,** since authentication is out of scope (D-19); in production these would be for administrators only.
+  - **Verified end to end** on a throwaway database through the HTTP API, 11 checks:
+    - Pat's `bargaining` went to review, with negotiation as the first suggestion. After one approval, Pat's match rose from 43.3 to 66.7 at once.
+    - The next candidate using `bargaining` got full credit immediately.
+    - The approval survived a reseed.
+    - A rejected guess lost its ¼ and stayed rejected after a reseed.
+- **Measured on independent data** (`python -m recruiter_bot.linking.evaluate_esco`): 20% of the imported ESCO synonyms (48), chosen by hash, are hidden from the system, plus 164 look-alike ESCO concepts that ESCO defines as different (such as "negotiate land access"). Neither list was written by us, and the D-45 thresholds were fixed before this test existed.
+
+  | | Result (95% interval) |
+  |---|---|
+  | Automatic credit right | 24 of 37 = 65% (49–78%) |
+  | … by the word-root rule | 9 of 10 = 90% (60–98%) |
+  | … by the model | 15 of 27 = **56%** (37–72%) |
+  | Hidden synonyms sent to review | 24, with the right concept **first in all 24** |
+  | Look-alikes wrongly credited | 13 of 164 = 8% (5–13%) |
+  | Look-alikes sent to review | 136 of 164 |
+
+  - **This corrects D-54's "11 of 12".** That figure came from words we labelled, scored leniently after seeing the results. Scored strictly by ESCO's definitions, the model's automatic guesses are right about half the time.
+  - **The errors are narrower or related ESCO concepts, never opposites:** `show empathy` → empathy, `woodworking tools` → woodworking, `crisis intervention` → crisis-management. That is the kind of error the ¼ cap (half of a curated "related" link) is sized for.
+  - **The review queue is the strong part:** each synonym the model was unsure about had the right answer first, so one approval teaches the system. Its cost is volume: most look-alikes land in review too, so a reviewer sees noise.
+  - **Not done here:** recalibrating the thresholds on ESCO data, which needs a separate calibration split. Whether the model should give automatic credit at all at 56% is an open decision; review-only (credit 0 until approved) is the safer setting.
+- **Scaling up:** load ESCO's full CSV with the same importer; store vectors in Postgres with `pgvector`; fine-tune the embedding model offline on ESCO's synonym pairs plus every approval; recalibrate the thresholds on each release, on a held-out ESCO split, using this same script.
+
+**D-56. Each job says whether its minimum experience is required or preferred; below it, a match is never "strong".**
+Before, the minimum was fully soft: a candidate with every skill and **0 of 8 required years** scored 80.0, a **strong match**. The score was right by the formula, but the label claimed a fit the job's own requirement says is missing.
+
+- **Production practice:** ATS platforms (Greenhouse, Workday, Lever) separate *required* from *preferred* qualifications, and the job owner chooses. A required one is a knockout, a preferred one only lowers the ranking, and either way the gap is shown, not hidden. The system shouldn't guess a hiring policy.
+- **So, per job, `experience_requirement`** (migration 011):
+
+  | Setting | Below the minimum |
+  |---|---|
+  | `preferred` (the default) | The score drops in proportion, as before, and the tier is **at most `possible_match`** |
+  | `required` | **No match**, like a job with no skill in common (D-12) |
+
+  It's set on POST and PATCH, shown in `GET /jobs`, and can't be cleared.
+- **Why `preferred` is the default:** the seed data doesn't say, and the brief asks for experience *fit*, not a filter. The gentler reading excludes no one, and it matches the ambiguity decision that the minimum is soft (D-13). The score formula is unchanged, so the sensitivity analysis (D-48) and the shared score in both directions (D-15) still hold.
+- **The gap is always visible:** every match entry has `meets_minimum_experience` (true or false) next to the experience evidence ("8 years, below the 10-year minimum"), so a client can show a warning badge without reading text.
+- **Ranks follow the tiers:** a capped candidate keeps its score, so a 96 below the minimum could outscore a strong 85. Each list now shows strong matches first, then possible ones, each in its own order, so rank 1, 2, 3 runs down the page.
+- **Effect on the current data: none.** No candidate was "strong" while below a job's minimum; 0 of 38 pairs changed tier and no score changed. `ALGORITHM_VERSION` is 5.
+- **Verified** through the live API, 8 checks:
+  - Sherlock (8 years) for a new job asking 10 scored 96.0 and was labelled `possible_match`, with `meets_minimum_experience: false`;
+  - set to `required`, he was no longer a match; set back to `preferred`, he returned;
+  - his strong matches for other jobs were unaffected;
+  - an unknown setting, or a null one in PATCH, returns 422.
+- **Not done:** a tolerance band ("within a year of the minimum counts"). That's a per-job policy for the job owner, and it can be added the same way.
+- **Revised: `required` is now the default for every job** (migration 012, `ALGORITHM_VERSION` 6).
+  - **Why:** a stated minimum is treated as a must, so nothing is assumed to be negotiable. `preferred` stays available for a job owner who chooses it later. This replaces D-13's "the minimum is soft" reading for listing purposes; extra years still earn nothing extra.
+  - **Effect:** 2 of 38 matches disappeared, both near misses (Steeven, 0 of 3 years; Elle for Incident Commander, 3 of 4). No other score or tier changed.
+  - **A consequence to know:** every listed match now meets the minimum, so its experience part is always full: 20 points for everyone. Experience decides *who is listed*, not the order among them; skills (70%) and culture (10%) do the ranking. For a `preferred` job, experience still ranks in proportion.
+
+---
+
+## Problems faced and how they were solved
+
+Each of these was found by checking results against real or held-out data, not by an existing test failing. The first is written out in full; the others are in the table below it.
+
+### The best skill pairing took minutes for realistic jobs (D-52)
+
+- **The problem:** matching pairs each candidate skill with at most one requirement, so one `persuasion` can't count toward both `sales` and `negotiation`. The pairing with the most credit in total has to be found. The first version tried every combination.
+- **Why it stayed hidden:** the seed jobs list 2–3 skills and the taxonomy has 11 relations, so almost nothing earns credit. Every test and every live check ran in microseconds.
+- **How it was found:** while asking "is the overlap robust?", the matcher was timed on synthetic jobs instead of assumed to scale.
+
+  | Required skills | Candidate skills | Time |
+  |---|---|---|
+  | 6 | 25 | 0.12 s |
+  | 8 | 25 | 5 s |
+  | 10 | 25 | 109 s |
+  | 12 | 25 | did not finish |
+- **Why it was serious:** matches are computed at write time, inside a transaction that holds the ingest lock. One job with ten skills would freeze every other write for minutes, and real postings list 8–20 skills.
+- **Options weighed:**
+  - **Greedy** (take the best credit first): fast, but wrong, because it can block a better total.
+  - **`scipy`'s solver:** right, but a large dependency for about 70 lines, and its tie handling can't be controlled.
+  - **The Hungarian algorithm, written out:** exact, polynomial time, and the ties can be controlled. Chosen.
+- **The fix:** `matching/assignment.py` solves the pairing as a maximum-weight assignment. The tie rule that the old search followed by accident is now an explicit rule, encoded in the weights.
+- **The proof:** the old search was loaded from git and compared with the new one.
+  - 272 real candidate-and-job pairs, and 20,000 random cases full of ties: identical total credit, pairing, matched and missing terms.
+  - All 37 stored matches were refreshed, and none changed.
+  - 10 skills went from 109 s to 0.3 ms, and 40 skills take under 4 ms.
+- **A false start worth recording:** the first tie scheme gave the same total credit but a different pairing in 629 of 6,000 tie cases. Comparing the pairing, not just the total, caught it, and it was replaced before anything was kept.
+- **The lesson:** a claim about an algorithm has to be measured at realistic sizes. The seed data could never have shown this.
+
+### Other problems found by checking, and how each was solved
+
+| Problem | How it was found | Fix | Decision |
+|---|---|---|---|
+| Re-running the seed pushed "2 weeks" a day further each time, so Hermione never became available | Comparing each candidate's `created_at` with the stored `available_from` | The seed only inserts new records, and PATCH edits survive | D-05, D-39 |
+| A typo rule linked `product-management` to `project-management`, two different jobs | Reading the linker's output on the real vocabulary | Typo distance is judged per word, not over the whole key | D-41 |
+| The same rule linked `apathetic` to `empathetic`, opposites | Running the rules over the 116-word evaluation set | A typo must keep its first letter | D-41 |
+| The int8 embedding model gave a phrase a different vector depending on which phrases shared its batch (a 0.012 difference, enough to flip a threshold) | A determinism check on the model wrapper | One input per model run | D-42 |
+| Model-based linking looked perfect on calibration (7 right, 0 wrong) and reached only 67% precision on the untouched test set, against a 98% target | Judging the chosen thresholds once on held-out words | Automatic linking switched off; the experiment kept out of the submission | D-45 |
+| The model's measured accuracy (11 of 12) came from words we labelled ourselves, scored leniently after seeing the results | Re-testing on ESCO's own labels, which nobody here wrote | Report the independent number, 56% strict for the model's automatic guesses, and keep its credit capped | D-55 |
+| A candidate with every skill and 0 of 8 required years was labelled a strong match | Probing the scorer's edge cases the way an interviewer would | A per-job `required` / `preferred` setting; below the minimum a match is at most possible, or no match when required | D-56 |
+| The sensitivity report counted a tie for first place as a changed winner, and reported a misleading 77% | Re-reading the report after the tie-break rule changed | A change counts only when someone scores strictly higher | D-48 |
 
 ---
 
@@ -463,7 +690,7 @@ There are no hiring outcomes to learn weights from, so the next best evidence is
 
 ## Out of scope
 
-Authentication, a UI (the brief says no frontend is needed), ML or LLM scoring, résumé parsing, matching on compensation, location or work authorization, pipeline stages, and a tool-level skill taxonomy.
+Authentication, a UI (the brief says no frontend is needed), ML or LLM scoring (models only suggest capped credit for unknown words, D-54), résumé parsing, matching on compensation, location or work authorization, pipeline stages, and a tool-level skill taxonomy.
 
 Résumé parsing is out of scope because the brief supplies structured records, not because production can skip it: real candidates arrive as documents. It would be a separate stage that produces the same structured record the seed files use, so nothing after ingestion changes.
 

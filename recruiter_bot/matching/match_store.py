@@ -17,8 +17,9 @@ DELETE_ALL_MATCHES_SQL = "DELETE FROM matches"
 
 INSERT_MATCH_SQL = """
     INSERT INTO matches (job_id, candidate_id, skill_score, experience_score, culture_score,
-                         score, reason, algorithm_version, matched_skills, missing_skills)
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                         score, reason, algorithm_version, matched_skills, missing_skills,
+                         matched_culture, missing_culture)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 """
 
 
@@ -103,6 +104,7 @@ def _insert_qualifying(conn: psycopg.Connection, results: list[MatchResult]) -> 
                 result.job_id, result.candidate_id, result.skill_score, result.experience_score,
                 result.culture_score, result.score, result.reason, ALGORITHM_VERSION,
                 result.matched_skills, result.missing_skills,
+                result.matched_culture, result.missing_culture,
             ))
     if rows:
         with conn.cursor() as cursor:
@@ -132,6 +134,7 @@ def refresh_if_stale(conn: psycopg.Connection) -> bool:
 class StoredMatch:
     job_id: int
     job_title: str
+    job_company: str | None  # tells apart jobs with the same title (D-53)
     candidate_id: int
     candidate_name: str
     score: float
@@ -140,21 +143,31 @@ class StoredMatch:
     culture_score: float | None
     matched_skills: list[str]
     missing_skills: list[str]
+    matched_culture: list[str]
+    missing_culture: list[str]
     reason: str
+    # The inputs behind the experience score, for the evidence (D-50).
+    candidate_experience_years: int
+    job_min_experience_years: int
     # Shown, never scored (D-06): the recruiter reads the quirk, the candidate reads the tagline.
     candidate_quirk: str | None
     job_tagline: str | None
     candidate_is_open: bool  # open to opportunities; decides the recruiter's two sections (D-49)
 
     @property
+    def meets_minimum_experience(self) -> bool:
+        return self.candidate_experience_years >= self.job_min_experience_years
+
+    @property
     def tier(self) -> str:
-        return tier_for(self.score)
+        return tier_for(self.score, self.meets_minimum_experience)
 
 
 STORED_MATCHES_SELECT = """
-    SELECT matches.job_id, jobs.title, matches.candidate_id, candidates.full_name,
+    SELECT matches.job_id, jobs.title, jobs.company, matches.candidate_id, candidates.full_name,
            matches.score, matches.skill_score, matches.experience_score, matches.culture_score,
-           matches.matched_skills, matches.missing_skills, matches.reason,
+           matches.matched_skills, matches.missing_skills, matches.matched_culture, matches.missing_culture,
+           matches.reason, candidates.experience_years, jobs.min_experience_years,
            candidates.quirk, jobs.tagline, candidates.open_to_opportunities
     FROM matches
     JOIN jobs       ON jobs.job_id             = matches.job_id
@@ -203,12 +216,14 @@ def stored_matches_for_job(conn: psycopg.Connection, job_id: int) -> list[Stored
 def _stored_matches(conn: psycopg.Connection, sql: str, entity_id: int) -> list[StoredMatch]:
     matches = []
     for row in conn.execute(sql, (entity_id, ALGORITHM_VERSION)).fetchall():
-        (job_id, job_title, candidate_id, candidate_name, score, skill_score, experience_score,
-         culture_score, matched_skills, missing_skills, reason, candidate_quirk, job_tagline,
-         candidate_is_open) = row
+        (job_id, job_title, job_company, candidate_id, candidate_name, score, skill_score, experience_score,
+         culture_score, matched_skills, missing_skills, matched_culture, missing_culture,
+         reason, candidate_experience_years, job_min_experience_years,
+         candidate_quirk, job_tagline, candidate_is_open) = row
         matches.append(StoredMatch(
             job_id=job_id,
             job_title=job_title,
+            job_company=job_company,
             candidate_id=candidate_id,
             candidate_name=candidate_name,
             score=float(score),
@@ -217,7 +232,11 @@ def _stored_matches(conn: psycopg.Connection, sql: str, entity_id: int) -> list[
             culture_score=None if culture_score is None else float(culture_score),
             matched_skills=matched_skills,
             missing_skills=missing_skills,
+            matched_culture=matched_culture,
+            missing_culture=missing_culture,
             reason=reason,
+            candidate_experience_years=candidate_experience_years,
+            job_min_experience_years=job_min_experience_years,
             candidate_quirk=candidate_quirk,
             job_tagline=job_tagline,
             candidate_is_open=candidate_is_open,

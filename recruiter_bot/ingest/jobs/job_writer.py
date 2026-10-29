@@ -3,22 +3,26 @@ import psycopg
 from recruiter_bot.ingest.jobs.job_batch import JobBatch
 
 UPSERT_JOBS_SQL = """
-    INSERT INTO jobs (slug, title, min_experience_years, tagline)
+    INSERT INTO jobs (source_key, slug, title, company, min_experience_years, experience_requirement, tagline)
     SELECT *
-    FROM unnest(%s::text[], %s::text[], %s::smallint[], %s::text[])
-    ON CONFLICT (slug) DO UPDATE SET
+    FROM unnest(%s::text[], %s::text[], %s::text[], %s::text[], %s::smallint[], %s::text[], %s::text[])
+    ON CONFLICT (source_key) DO UPDATE SET
+        slug                 = EXCLUDED.slug,
         title                = EXCLUDED.title,
+        company              = EXCLUDED.company,
         min_experience_years = EXCLUDED.min_experience_years,
+        experience_requirement = EXCLUDED.experience_requirement,
         tagline              = EXCLUDED.tagline
-    WHERE (jobs.title, jobs.min_experience_years, jobs.tagline)
+    WHERE (jobs.slug, jobs.title, jobs.company, jobs.min_experience_years, jobs.experience_requirement, jobs.tagline)
           IS DISTINCT FROM
-          (EXCLUDED.title, EXCLUDED.min_experience_years, EXCLUDED.tagline)
+          (EXCLUDED.slug, EXCLUDED.title, EXCLUDED.company, EXCLUDED.min_experience_years,
+           EXCLUDED.experience_requirement, EXCLUDED.tagline)
 """
 
 FIND_JOB_IDS_SQL = """
-    SELECT slug, job_id
+    SELECT source_key, job_id
     FROM jobs
-    WHERE slug = ANY(%s)
+    WHERE source_key = ANY(%s)
 """
 
 DELETE_JOB_SKILLS_SQL = """
@@ -50,28 +54,31 @@ def save_jobs(
     skill_ids: dict[str, int],
     trait_ids: dict[str, int],
 ) -> dict[str, int]:
-    """Upserts the jobs and replaces their skill and culture-trait links. Returns slug -> job_id."""
-    if not batch.slugs:
+    """Upserts the jobs and replaces their skill and culture-trait links. Returns source key -> job_id."""
+    if not batch.source_keys:
         return {}
 
     conn.execute(UPSERT_JOBS_SQL, (
+        batch.source_keys,
         batch.slugs,
         batch.titles,
+        batch.companies,
         batch.min_experience_years,
+        batch.experience_requirements,
         batch.taglines,
     ))
 
     job_ids = {}
-    for slug, job_id in conn.execute(FIND_JOB_IDS_SQL, (batch.slugs,)).fetchall():
-        job_ids[slug] = job_id
+    for source_key, job_id in conn.execute(FIND_JOB_IDS_SQL, (batch.source_keys,)).fetchall():
+        job_ids[source_key] = job_id
 
     all_job_ids = list(job_ids.values())
 
     conn.execute(DELETE_JOB_SKILLS_SQL, (all_job_ids,))
     skill_owner_ids = []
     skill_value_ids = []
-    for job_slug, skill_slug in batch.skill_links:
-        skill_owner_ids.append(job_ids[job_slug])
+    for job_key, skill_slug in batch.skill_links:
+        skill_owner_ids.append(job_ids[job_key])
         skill_value_ids.append(skill_ids[skill_slug])
     if skill_owner_ids:
         conn.execute(INSERT_JOB_SKILLS_SQL, (skill_owner_ids, skill_value_ids))
@@ -79,8 +86,8 @@ def save_jobs(
     conn.execute(DELETE_JOB_CULTURE_TRAITS_SQL, (all_job_ids,))
     trait_owner_ids = []
     trait_value_ids = []
-    for job_slug, trait_slug in batch.culture_trait_links:
-        trait_owner_ids.append(job_ids[job_slug])
+    for job_key, trait_slug in batch.culture_trait_links:
+        trait_owner_ids.append(job_ids[job_key])
         trait_value_ids.append(trait_ids[trait_slug])
     if trait_owner_ids:
         conn.execute(INSERT_JOB_CULTURE_TRAITS_SQL, (trait_owner_ids, trait_value_ids))

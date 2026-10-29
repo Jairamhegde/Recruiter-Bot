@@ -1,14 +1,25 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 
-from recruiter_bot.api.schemas import CandidateMatches, CandidateSummary, JobMatchesByTier
+from recruiter_bot.api.schemas import CandidateMatches, CandidateSummary
 from recruiter_bot.db import connect
 from recruiter_bot.ingest.candidates.candidate_creator import CandidateExists, CandidateRejected, add_candidate
 from recruiter_bot.ingest.candidates.candidate_extractor import CandidateInput
 from recruiter_bot.ingest.candidates.candidate_updater import CandidateNotFound, CandidatePatch, update_candidate
 from recruiter_bot.matching import stored_matches_for_candidate
+from recruiter_bot.matching.candidate_view import preferences_of, standings_for_candidate
 from recruiter_bot.matching.profile_reader import load_candidate_profiles
 
 router = APIRouter(prefix="/candidates", tags=["candidates"])
+
+
+def matches_for(conn, candidate_id: int, explain: bool = False) -> CandidateMatches | None:
+    """The candidate's jobs in the order of D-51, or None if the candidate doesn't exist."""
+    results = stored_matches_for_candidate(conn, candidate_id)
+    if results is None:
+        return None
+    standings = standings_for_candidate(conn, candidate_id)
+    preferences = preferences_of(conn, candidate_id)
+    return CandidateMatches.from_results(candidate_id, results, standings, preferences, explain)
 
 
 @router.get("", response_model=list[CandidateSummary])
@@ -29,9 +40,8 @@ def create_candidate(candidate: CandidateInput) -> CandidateMatches:
             raise HTTPException(status_code=409, detail=str(error))
         except CandidateRejected as error:
             raise HTTPException(status_code=422, detail=str(error))
-        results = stored_matches_for_candidate(conn, candidate_id)
-
-    return CandidateMatches(candidate_id=candidate_id, matches=JobMatchesByTier.from_results(results))
+        response = matches_for(conn, candidate_id)
+    return response
 
 
 @router.patch("/{candidate_id}", response_model=CandidateMatches)
@@ -46,20 +56,19 @@ def patch_candidate(candidate_id: int, patch: CandidatePatch) -> CandidateMatche
             raise HTTPException(status_code=409, detail=str(error))
         except CandidateRejected as error:
             raise HTTPException(status_code=422, detail=str(error))
-        results = stored_matches_for_candidate(conn, candidate_id)
-
-    return CandidateMatches(candidate_id=candidate_id, matches=JobMatchesByTier.from_results(results))
+        response = matches_for(conn, candidate_id)
+    return response
 
 
 @router.get("/{candidate_id}/matches", response_model=CandidateMatches)
-def candidate_matches(candidate_id: int) -> CandidateMatches:
-    """Jobs that match the candidate, grouped by tier (D-34), each with its score breakdown and reason."""
+def candidate_matches(
+    candidate_id: int,
+    explain: bool = Query(False, description="Add the score, weight and points of each factor to every match (D-50)."),
+) -> CandidateMatches:
+    """The candidate's jobs by tier: score first, then preference, standing and posting date (D-51)."""
     with connect() as conn:
-        results = stored_matches_for_candidate(conn, candidate_id)
+        response = matches_for(conn, candidate_id, explain)
 
-    if results is None:
+    if response is None:
         raise HTTPException(status_code=404, detail=f"No candidate with id {candidate_id}")
-    return CandidateMatches(
-        candidate_id=candidate_id,
-        matches=JobMatchesByTier.from_results(results),
-    )
+    return response

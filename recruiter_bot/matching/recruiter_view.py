@@ -22,6 +22,9 @@ def shown_matches(matches: list[StoredMatch]) -> tuple[list[StoredMatch], bool]:
     """
     real_matches = [match for match in matches if is_a_match(match)]
     if real_matches:
+        # Strong before possible, keeping each tier's own order. A match below the job's minimum years
+        # is at most possible even with a high score (D-56), so ranks must follow the tiers, not the score alone.
+        real_matches.sort(key=lambda match: match.tier != "strong_match")
         return real_matches, False
     near_misses = [match for match in matches if match.tier == "near_miss"]
     return near_misses[:NEAR_MISS_LIMIT], bool(near_misses)

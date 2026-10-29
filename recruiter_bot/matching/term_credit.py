@@ -9,11 +9,15 @@ from recruiter_bot.ingest.text_normalizer import compact_key
 @dataclass(frozen=True)
 class Credit:
     value: float
-    kind: str  # "exact", "synonym", "related" or "none"
+    kind: str  # "exact", "synonym", "related", "suggested" or "none"
 
 
 NO_CREDIT = Credit(0.0, "none")
 EXACT = Credit(1.0, "exact")
+
+# D-54: a word the model linked to a concept, with no person checking it yet. Half of "related",
+# so a model guess can never count as much as a curated relation, let alone a synonym.
+SUGGESTED_CREDIT = 0.25
 
 
 class TermCredit(Protocol):
@@ -32,15 +36,18 @@ class ExactCredit:
 
 
 class TaxonomyCredit:
-    """Same term or same concept 1.0, related concept per its relation, anything else 0 (D-29)."""
+    """Same term or same concept 1.0, related concept per its relation, a model-suggested link 0.25,
+    anything else 0 (D-29, D-54)."""
 
     def __init__(
         self,
         concept_by_label: dict[tuple[str, str], int],
         relation_credit: dict[tuple[int, int], float],
+        suggested_concept: dict[tuple[str, str], int] | None = None,
     ) -> None:
         self._concept_by_label = concept_by_label
         self._relation_credit = relation_credit
+        self._suggested_concept = suggested_concept or {}
 
     def credit(self, concept_type: str, candidate_term: str, job_term: str) -> Credit:
         if compact_key(candidate_term) == compact_key(job_term):
@@ -49,7 +56,7 @@ class TaxonomyCredit:
         candidate_concept = self._concept_by_label.get((concept_type, compact_key(candidate_term)))
         job_concept = self._concept_by_label.get((concept_type, compact_key(job_term)))
         if candidate_concept is None or job_concept is None:
-            return NO_CREDIT
+            return self._suggested_credit(concept_type, candidate_term, job_term, candidate_concept, job_concept)
         if candidate_concept == job_concept:
             return Credit(1.0, "synonym")
 
@@ -59,10 +66,39 @@ class TaxonomyCredit:
             return Credit(value, "related")
         return NO_CREDIT
 
+    def _suggested_credit(
+        self, concept_type: str, candidate_term: str, job_term: str,
+        candidate_concept: int | None, job_concept: int | None,
+    ) -> Credit:
+        """One side is unknown to the taxonomy, but the model linked it to the other side's concept (D-54).
+
+        Only one guess per pair: two unknown words suggested to the same concept earn nothing,
+        and a suggestion never travels through a relation to a third concept.
+        """
+        if candidate_concept is None and job_concept is not None:
+            suggested = self._suggested_concept.get((concept_type, compact_key(candidate_term)))
+            if suggested == job_concept:
+                return Credit(SUGGESTED_CREDIT, "suggested")
+        if job_concept is None and candidate_concept is not None:
+            suggested = self._suggested_concept.get((concept_type, compact_key(job_term)))
+            if suggested == candidate_concept:
+                return Credit(SUGGESTED_CREDIT, "suggested")
+        return NO_CREDIT
+
 
 CONCEPT_LABELS_SQL = "SELECT concept_type, compact_key, concept_id FROM concept_labels"
 
 CONCEPT_RELATIONS_SQL = "SELECT from_concept_id, to_concept_id, credit FROM concept_relations"
+
+# A confident model link earns suggested credit (D-54); a word a person approved is a synonym (D-55).
+# Words for review and rejected words earn nothing.
+SUGGESTED_LINKS_SQL = """
+    SELECT term_suggestions.concept_type, term_suggestions.term, term_suggestions.outcome, concepts.concept_id
+    FROM term_suggestions
+    JOIN concepts ON concepts.concept_type = term_suggestions.concept_type
+                 AND concepts.slug = term_suggestions.concept_slug
+    WHERE term_suggestions.outcome IN ('linked', 'approved')
+"""
 
 
 def load_taxonomy_credit(conn: psycopg.Connection) -> TaxonomyCredit:
@@ -73,4 +109,12 @@ def load_taxonomy_credit(conn: psycopg.Connection) -> TaxonomyCredit:
     relation_credit = {}
     for from_concept_id, to_concept_id, credit in conn.execute(CONCEPT_RELATIONS_SQL).fetchall():
         relation_credit[(from_concept_id, to_concept_id)] = float(credit)
-    return TaxonomyCredit(concept_by_label, relation_credit)
+
+    suggested_concept = {}
+    for concept_type, term, outcome, concept_id in conn.execute(SUGGESTED_LINKS_SQL).fetchall():
+        if outcome == "approved":
+            # A person said so: from now on the word is a synonym, exactly like a taxonomy label.
+            concept_by_label.setdefault((concept_type, compact_key(term)), concept_id)
+        else:
+            suggested_concept[(concept_type, compact_key(term))] = concept_id
+    return TaxonomyCredit(concept_by_label, relation_credit, suggested_concept)

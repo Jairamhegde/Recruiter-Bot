@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 
 from recruiter_bot.api.schemas import JobMatches, JobSummary
 from recruiter_bot.db import connect
@@ -52,11 +52,14 @@ def patch_job(job_id: int, patch: JobPatch) -> JobMatches:
 
 
 @router.get("/{job_id}/matches", response_model=JobMatches)
-def job_matches(job_id: int) -> JobMatches:
+def job_matches(
+    job_id: int,
+    explain: bool = Query(False, description="Add the score, weight and points of each factor to every match (D-50)."),
+) -> JobMatches:
     """Open candidates grouped by tier, then candidates not looking who are worth a proactive offer (D-49)."""
     with connect() as conn:
         results = stored_matches_for_job(conn, job_id)
 
     if results is None:
         raise HTTPException(status_code=404, detail=f"No job with id {job_id}")
-    return JobMatches.from_results(job_id, results)
+    return JobMatches.from_results(job_id, results, explain)
