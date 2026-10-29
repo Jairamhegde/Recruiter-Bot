@@ -2,12 +2,9 @@ from fastapi import APIRouter, HTTPException, Query, status
 
 from recruiter_bot.api.schemas import CandidateMatches, CandidateSummary
 from recruiter_bot.db import connect
-from recruiter_bot.ingest.candidates.candidate_creator import CandidateExists, CandidateRejected, add_candidate
-from recruiter_bot.ingest.candidates.candidate_extractor import CandidateInput
-from recruiter_bot.ingest.candidates.candidate_updater import CandidateNotFound, CandidatePatch, update_candidate
-from recruiter_bot.matching import stored_matches_for_candidate
-from recruiter_bot.matching.candidate_view import preferences_of, standings_for_candidate
-from recruiter_bot.matching.profile_reader import load_candidate_profiles
+from recruiter_bot.ingest import CandidateInput, CandidatePatch, insert_candidate, update_candidate
+from recruiter_bot.matching.store import load_candidate_profiles, refresh_matches, stored_matches_for_candidate
+from recruiter_bot.matching.views import standings_for_candidate
 
 router = APIRouter(prefix="/candidates", tags=["candidates"])
 
@@ -17,9 +14,7 @@ def matches_for(conn, candidate_id: int, explain: bool = False) -> CandidateMatc
     results = stored_matches_for_candidate(conn, candidate_id)
     if results is None:
         return None
-    standings = standings_for_candidate(conn, candidate_id)
-    preferences = preferences_of(conn, candidate_id)
-    return CandidateMatches.from_results(candidate_id, results, standings, preferences, explain)
+    return CandidateMatches.from_results(candidate_id, results, standings_for_candidate(conn, candidate_id), explain)
 
 
 @router.get("", response_model=list[CandidateSummary])
@@ -32,32 +27,24 @@ def list_candidates() -> list[CandidateSummary]:
 
 @router.post("", response_model=CandidateMatches, status_code=status.HTTP_201_CREATED)
 def create_candidate(candidate: CandidateInput) -> CandidateMatches:
-    """Stores a new candidate profile and returns its matching jobs, grouped by tier."""
+    """Stores a new candidate profile and returns their matching jobs, grouped by tier."""
     with connect() as conn:
-        try:
-            candidate_id = add_candidate(conn, candidate.model_dump())
-        except CandidateExists as error:
-            raise HTTPException(status_code=409, detail=str(error))
-        except CandidateRejected as error:
-            raise HTTPException(status_code=422, detail=str(error))
-        response = matches_for(conn, candidate_id)
-    return response
+        # One transaction, so the candidate never appears without their matches.
+        with conn.transaction():
+            candidate_id = insert_candidate(conn, candidate)
+            refresh_matches(conn, candidate_id=candidate_id)
+        return matches_for(conn, candidate_id)
 
 
 @router.patch("/{candidate_id}", response_model=CandidateMatches)
 def patch_candidate(candidate_id: int, patch: CandidatePatch) -> CandidateMatches:
     """Changes only the fields sent, then returns the candidate's refreshed matches."""
     with connect() as conn:
-        try:
-            update_candidate(conn, candidate_id, patch)
-        except CandidateNotFound as error:
-            raise HTTPException(status_code=404, detail=str(error))
-        except CandidateExists as error:
-            raise HTTPException(status_code=409, detail=str(error))
-        except CandidateRejected as error:
-            raise HTTPException(status_code=422, detail=str(error))
-        response = matches_for(conn, candidate_id)
-    return response
+        with conn.transaction():
+            if not update_candidate(conn, candidate_id, patch):
+                raise HTTPException(status_code=404, detail=f"No candidate with id {candidate_id}")
+            refresh_matches(conn, candidate_id=candidate_id)
+        return matches_for(conn, candidate_id)
 
 
 @router.get("/{candidate_id}/matches", response_model=CandidateMatches)

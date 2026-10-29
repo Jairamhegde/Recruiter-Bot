@@ -113,7 +113,7 @@ select j.id as job_posting_id, j.title as job_title, count(distinct i.applicant_
 from job_postings j
 left join interviews i on j.id = i.job_posting_id and i.stage = 'Final'
 group by j.id, j.title
-order by final_stage_applicants desc;
+order by final_stage_applicants desc,j.id;
 
 
 -- 3. Find every person who effectively applied to more than one job posting.
@@ -156,4 +156,20 @@ order by conversion_rate desc;
 
 -- 5. (Bonus) Using a window function, find the recruiter with the most successful placements
 --    (passed at Final stage) per department.
--- TODO: my own answer goes here.
+
+with temp as (
+select r.id,jp.department ,count(*) as successful_placements 
+from recruiters r 
+join job_postings jp on r.id = jp.recruiter_id 
+join interviews i on jp.id = i.job_posting_id 
+where i.stage = 'Final' and i.outcome = 'passed' 
+group by r.id,jp.department 
+),
+ranked as (
+select r.name,t.department , successful_placements, DENSE_RANK() OVER(partition by department order by successful_placements desc) as rank 
+from recruiters r 
+join temp t on r.id = t.id
+)
+select name,department,successful_placements, rank 
+from ranked
+where rank = 1;

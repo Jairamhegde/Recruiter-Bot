@@ -1,20 +1,35 @@
+import itertools
+import random
 from datetime import datetime
 
+import psycopg
+import pytest
+from pydantic import ValidationError
+
+from recruiter_bot import seed
 from recruiter_bot.api.candidates import matches_for
 from recruiter_bot.api.schemas import JobMatches
-from recruiter_bot.matching.candidate_view import Standing, order_for_candidate
-from recruiter_bot.matching.match_store import StoredMatch
-from recruiter_bot.matching import (
-    CandidateProfile,
-    Credit,
-    ExactCredit,
-    JobProfile,
-    rank_candidates_for_job,
-    score_match,
+from recruiter_bot.ingest import (
+    CandidateInput,
+    CandidatePatch,
+    JobInput,
+    JobPatch,
+    insert_candidate,
+    insert_job,
+    update_candidate,
+    update_job,
+)
+from recruiter_bot.matching.scorer import CandidateProfile, JobProfile, best_pairing, score_match, tier_for
+from recruiter_bot.matching.store import (
+    StoredMatch,
+    load_candidate_profiles,
+    load_job_profiles,
+    refresh_matches,
     stored_matches_for_candidate,
     stored_matches_for_job,
-    tier_for,
 )
+from recruiter_bot.matching.views import Standing, order_for_candidate
+from recruiter_bot.taxonomy import Credit, ExactCredit, load_taxonomy_credit
 
 
 def a_job(**changes) -> JobProfile:
@@ -125,7 +140,7 @@ def test_a_score_of_exactly_50_counts_as_a_match_and_70_as_a_strong_one():
 def a_stored_match(job_id: int, score: float) -> StoredMatch:
     """Candidate 1's stored match for this job; only the ids and the score matter for ordering."""
     return StoredMatch(
-        job_id=job_id, job_title=f"job {job_id}", job_company=None, candidate_id=1, candidate_name="Pat",
+        job_id=job_id, job_title=f"job {job_id}", candidate_id=1, candidate_name="Pat",
         score=score, skill_score=1.0, experience_score=1.0, culture_score=None,
         matched_skills=[], missing_skills=[], matched_culture=[], missing_culture=[], reason="",
         candidate_experience_years=5, job_min_experience_years=2,
@@ -137,10 +152,10 @@ def test_a_candidates_tied_jobs_put_the_one_they_lead_first_then_the_newest():
     """Score first; on a tie, the job where they're top applicant; then the newer posting."""
     older, newer = datetime(2026, 1, 1), datetime(2026, 2, 1)
     standings = {
-        1: Standing(above=1, job_slug="job-1", posted_at=newer),  # same score, but a rival scores higher
-        2: Standing(above=0, job_slug="job-2", posted_at=older),  # same score, top applicant
-        3: Standing(above=0, job_slug="job-3", posted_at=newer),  # same score, top applicant, newer
-        4: Standing(above=0, job_slug="job-4", posted_at=newer),  # better score, so first whatever else
+        1: Standing(above=1, posted_at=newer),  # same score, but a rival scores higher
+        2: Standing(above=0, posted_at=older),  # same score, top applicant
+        3: Standing(above=0, posted_at=newer),  # same score, top applicant, newer
+        4: Standing(above=0, posted_at=newer),  # better score, so first whatever else
     }
     matches = [a_stored_match(1, 70.0), a_stored_match(2, 70.0), a_stored_match(3, 70.0), a_stored_match(4, 80.0)]
 
@@ -211,9 +226,11 @@ def test_both_directions_give_every_pair_the_same_score(conn):
 
 def test_stored_matches_equal_a_fresh_calculation(conn):
     """Stored matches equal a fresh calculation."""
-    for (job_id,) in conn.execute("SELECT job_id FROM jobs").fetchall():
-        stored = {(m.candidate_id, m.score) for m in stored_matches_for_job(conn, job_id)}
-        fresh = {(r.candidate_id, r.score) for r in rank_candidates_for_job(conn, job_id)}
+    credit = load_taxonomy_credit(conn)
+    candidates = load_candidate_profiles(conn)
+    for job in load_job_profiles(conn):
+        stored = {(m.candidate_id, m.score) for m in stored_matches_for_job(conn, job.job_id)}
+        fresh = {(c.candidate_id, r.score) for c in candidates if (r := score_match(c, job, credit)).qualifies}
 
         assert stored == fresh
 
@@ -268,3 +285,120 @@ def test_the_taxonomy_gives_a_synonym_full_credit_and_a_related_word_half(conn):
 
     assert "calm-under-pressure" in katniss.matched_culture
     assert katniss.culture_score == 0.75
+
+
+def test_patch_changes_only_the_fields_sent_and_refreshes_matches(conn):
+    """Ron gains every Sales Engineer skill: his skill score rises to 1, and his name and years stay the same."""
+
+    def rons_skill_score(ron: int, job_id: int) -> float:
+        return next(m.skill_score for m in stored_matches_for_job(conn, job_id) if m.candidate_id == ron)
+
+    with conn.transaction(force_rollback=True):
+        ron = candidate_id_of(conn, "Ron S.")
+        sales_engineer = job_id_of(conn, "Sales Engineer")
+        assert rons_skill_score(ron, sales_engineer) < 1.0  # he has only negotiation
+
+        assert update_candidate(conn, ron, CandidatePatch(skills=["Sales", "Negotiation", "Public Speaking"])) is True
+        refresh_matches(conn, candidate_id=ron)
+
+        assert rons_skill_score(ron, sales_engineer) == 1.0
+        profile = load_candidate_profiles(conn, ron)[0]
+        assert (profile.full_name, profile.experience_years) == ("Ron S.", 15)
+        assert profile.skills == ["negotiation", "public-speaking", "sales"]
+
+
+def test_patch_of_a_missing_record_changes_nothing(conn):
+    """An unknown id is reported, so the API can answer 404."""
+    assert update_job(conn, 999_999, JobPatch(tagline="nobody")) is False
+
+
+def test_patch_refuses_unknown_fields_and_clearing_required_ones():
+    """A typo fails loudly, and a required field can be changed but not removed."""
+    with pytest.raises(ValidationError):
+        CandidatePatch.model_validate({"skils": ["sales"]})
+    with pytest.raises(ValidationError):
+        JobPatch.model_validate({"title": None})
+    assert JobPatch.model_validate({"tagline": None}).model_fields_set == {"tagline"}
+
+
+def culture_of_new_pair(conn, candidate_traits: list[str], job_culture: list[str]) -> tuple[float, list[str]]:
+    """Stores a fresh job and candidate who share a skill, and returns their culture score and matched keywords."""
+    job_id = insert_job(conn, JobInput(
+        title="Culture Test", required_skills=["negotiation"], min_experience_years=0, culture_keywords=job_culture,
+    ))
+    candidate_id = insert_candidate(conn, CandidateInput(
+        name="Culture Tester", skills=["negotiation"], experience_years=1, availability="Immediate",
+        traits=candidate_traits,
+    ))
+    refresh_matches(conn, job_id=job_id)
+    match = next(m for m in stored_matches_for_job(conn, job_id) if m.candidate_id == candidate_id)
+    return match.culture_score, match.matched_culture
+
+
+def test_a_concepts_own_name_matches_its_other_words_in_both_directions(conn):
+    """`resilience` (the concept's name) and `cope-with-pressures` (one of its labels) match whichever side has which."""
+    with conn.transaction(force_rollback=True):
+        assert culture_of_new_pair(conn, ["Resilience"], ["cope-with-pressures"]) == (1.0, ["cope-with-pressures"])
+        assert culture_of_new_pair(conn, ["Cope with pressures"], ["resilience"]) == (1.0, ["resilience"])
+
+
+def test_a_word_the_taxonomy_does_not_know_matches_only_its_own_spelling(conn):
+    """No concept means no synonyms: `grit` earns nothing toward `resilient`, but full credit toward `grit`."""
+    with conn.transaction(force_rollback=True):
+        assert culture_of_new_pair(conn, ["grit"], ["resilient"]) == (0.0, [])
+        assert culture_of_new_pair(conn, ["Grit"], ["grit"]) == (1.0, ["grit"])
+
+
+def test_every_word_the_taxonomy_knows_is_linked_to_its_concept(conn):
+    """After seeding, a seed word with a label has its concept stored, e.g. `tenacious` -> persistence."""
+    row = conn.execute("""
+        SELECT concepts.slug FROM traits JOIN concepts ON concepts.concept_id = traits.concept_id
+        WHERE traits.slug = 'tenacious'
+    """).fetchone()
+    assert row == ("persistence",)
+
+
+def test_the_database_refuses_a_spelling_that_would_mean_two_concepts(conn):
+    """`team-building` is already a label; `teambuilding` for another concept is refused by the database itself."""
+    with conn.transaction(force_rollback=True):
+        other_concept = conn.execute(
+            "SELECT concept_id FROM concepts WHERE concept_type = 'skill' AND slug = 'leadership'"
+        ).fetchone()[0]
+        with pytest.raises(psycopg.errors.UniqueViolation):
+            with conn.transaction():
+                conn.execute(
+                    "INSERT INTO concept_labels (concept_id, concept_type, label) VALUES (%s, 'skill', 'teambuilding')",
+                    (other_concept,),
+                )
+
+
+def test_the_hungarian_pairing_always_earns_the_brute_force_maximum():
+    """On 500 random cases, the pairing uses each skill once and earns exactly the best possible total."""
+    rng = random.Random(42)
+    for _ in range(500):
+        rows, columns = rng.randint(1, 4), rng.randint(0, 6)
+        credits = [[rng.choice([0.0, 0.0, 0.5, 1.0]) for _ in range(columns)] for _ in range(rows)]
+
+        pairing = best_pairing(credits)
+        used = [column for column in pairing if column is not None]
+        assert len(used) == len(set(used))
+        earned = sum(credits[row][column] for row, column in enumerate(pairing) if column is not None)
+
+        # Brute force: every way to give each requirement a different skill, or none.
+        options = list(range(columns)) + [None] * rows
+        best = max(
+            sum(credits[row][column] for row, column in enumerate(choice) if column is not None)
+            for choice in itertools.permutations(options, rows)
+        )
+        assert earned == best
+
+
+def test_running_the_seed_again_adds_nothing(conn):
+    """Each seed file is loaded once (recorded in seed_runs), so a restart never duplicates a record."""
+    count_sql = "SELECT (SELECT count(*) FROM candidates), (SELECT count(*) FROM jobs), (SELECT count(*) FROM matches)"
+    before = conn.execute(count_sql).fetchone()
+    conn.commit()
+
+    seed.run()
+
+    assert conn.execute(count_sql).fetchone() == before
