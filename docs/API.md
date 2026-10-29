@@ -14,9 +14,6 @@ All bodies are JSON. On Windows, use `curl.exe` instead of `curl`.
 | GET | [`/candidates/{candidate_id}/matches`](#get-candidatescandidate_idmatches) | Ranks the jobs for a candidate (the candidate's view) |
 | POST | [`/candidates`](#post-candidates) | Adds a candidate and returns their matches |
 | PATCH | [`/candidates/{candidate_id}`](#patch-candidatescandidate_id) | Changes some fields of a candidate and returns their refreshed matches |
-| GET | [`/taxonomy/suggestions`](#get-taxonomysuggestions) | Shows what the model stage linked, the words waiting for review, and every decision |
-| POST | [`/taxonomy/suggestions/{type}/{term}/approve`](#post-taxonomysuggestionstypetermapprove) | A person confirms what an unknown word means |
-| POST | [`/taxonomy/suggestions/{type}/{term}/reject`](#post-taxonomysuggestionstypetermreject) | A person rejects the model's guess |
 
 ---
 
@@ -62,8 +59,7 @@ Each entry has:
 | Status | When |
 |---|---|
 | `404` | No job or candidate with that id |
-| `409` | An email another candidate already uses, or a title the same company already has (letter case is ignored). Names, and titles without a company, may repeat. |
-| `422` | Invalid input, e.g. no skills, a negative number of years, `"availability": "someday"`, an unknown field in a PATCH, or `?explain=maybe` |
+| `422` | Invalid input, e.g. no skills, a negative number of years, `"availability": "someday"`, a skill with no letters (`"!!!"`), an unknown field or a cleared required field in a PATCH, or `?explain=maybe` |
 
 ---
 
@@ -136,8 +132,7 @@ Adds a job. The response is the same as `GET /jobs/{job_id}/matches` for the new
 
 | Field | Required | Type | Notes |
 |---|---|---|---|
-| `title` | yes | text | Unique within its company (`409` otherwise); may repeat across companies |
-| `company` | no | text | The company posting the job; with the title, it identifies the job |
+| `title` | yes | text | |
 | `required_skills` | yes | list of text | At least one |
 | `min_experience_years` | yes | whole number | 0 to 70 |
 | `experience_requirement` | no | `"required"` (default) or `"preferred"` | `required`: below the minimum, no match. `preferred`: below it, the score drops and the match is at most `possible_match`. |
@@ -156,7 +151,7 @@ Changes only the fields you send; the rest stay as they are. The response is the
 
 - The fields are the same as POST, all optional.
 - A list you send **replaces** the stored list.
-- `"tagline": null` or `"company": null` clears it. Required fields can't be cleared.
+- `"tagline": null` clears it. Required fields can't be cleared.
 - An unknown field (such as a typo, `"titel"`) returns `422`.
 
 ```bash
@@ -168,7 +163,7 @@ curl -X PATCH http://127.0.0.1:8000/jobs/6 -H "Content-Type: application/json" -
 ## Candidates
 
 ### GET /candidates
-Lists every candidate, sorted by id, with their skills, traits and job preferences.
+Lists every candidate, sorted by id, with their skills and traits.
 
 ```bash
 curl http://127.0.0.1:8000/candidates
@@ -177,7 +172,7 @@ curl http://127.0.0.1:8000/candidates
 ```json
 [
   { "candidate_id": 1, "name": "Sherlock H.", "experience_years": 8,
-    "skills": ["deduction", "forensics", "pattern-recognition"], "traits": ["analytical", "blunt"], "job_preferences": [] }
+    "skills": ["deduction", "forensics", "pattern-recognition"], "traits": ["analytical", "blunt"] }
 ]
 ```
 
@@ -196,7 +191,6 @@ Each job entry also shows:
 |---|---|
 | `tagline` | The job's tagline, never scored |
 | `top_applicant` | `true` when no competing candidate scores higher. Shown as a yes or no, never a count, to protect other candidates. |
-| `matches_preference` | `true` when the job's title is one of the candidate's `job_preferences`. Shown only; it doesn't change the order. |
 
 | Query option | Default | Effect |
 |---|---|---|
@@ -214,7 +208,7 @@ curl "http://127.0.0.1:8000/candidates/7/matches?explain=true"
     "strong_match": [
       { "rank": 1, "job_id": 3, "job_title": "Developer Relations Lead", "score": 90.0,
         "reason": "...", "evidence": { "...": "..." },
-        "tagline": "...", "top_applicant": true, "matches_preference": false }
+        "tagline": "...", "top_applicant": true }
     ],
     "possible_match": [
       { "rank": 2, "job_id": 6, "job_title": "Sales Engineer", "score": 55.0, "...": "..." }
@@ -231,13 +225,11 @@ Adds a candidate. The response is the same as `GET /candidates/{candidate_id}/ma
 | Field | Required | Type | Notes |
 |---|---|---|---|
 | `name` | yes | text | May repeat: people share names |
-| `email` | no | text | Identifies the person; unique when present (`409` otherwise), stored in lower case |
 | `skills` | yes | list of text | At least one |
 | `experience_years` | yes | whole number | Total career years, 0 to 70 |
 | `availability` | yes | text | `"Immediate"`, a delay such as `"2 weeks"`, `"10 days"` or `"1 month"`, or `"Not looking"` |
 | `traits` | no | list of text | Matched against jobs' culture keywords |
 | `quirk` | no | text | Shown to recruiters, never scored |
-| `job_preferences` | no | list of text | Job titles the candidate wants; used to order their jobs |
 
 A delay is turned into a start date when the candidate is added, and it never moves after that.
 
@@ -251,77 +243,10 @@ Changes only the fields you send. The response is the candidate's refreshed matc
 
 - The fields are the same as POST, all optional.
 - A list you send **replaces** the stored list.
-- `"quirk": null`, `"email": null` or `"job_preferences": null` clears it. Required fields can't be cleared.
+- Sending `availability` sets a new start date, counted from today.
+- `"quirk": null` clears it. Required fields can't be cleared.
 - An unknown field returns `422`.
 
 ```bash
-curl -X PATCH http://127.0.0.1:8000/candidates/7 -H "Content-Type: application/json" \
-  -d '{"job_preferences": ["Sales Engineer"]}'
-```
-
----
-
-## Taxonomy
-
-### GET /taxonomy/suggestions
-What the optional model stage concluded about words the rules couldn't place.
-
-| Field | Meaning |
-|---|---|
-| `model_linking` | `"on"`, `"off"` (`MODEL_LINKING=off`) or `"unavailable"` (libraries or model files missing) |
-| `reason` | Why, when it isn't on |
-| `linked` | Words that earn capped "suggested" credit (0.25) toward a concept, with the model scores behind each |
-| `review` | Words waiting for a person: up to 3 suggested concepts, best first |
-| `approved` | Words a person confirmed: full synonym credit |
-| `rejected` | Words a person rejected: no credit, never suggested again |
-
-A word moves from `review` to full credit when a person approves it (below), or when it's added to `seed/taxonomy.json`.
-
-```bash
-curl http://127.0.0.1:8000/taxonomy/suggestions
-```
-
-```json
-{
-  "model_linking": "on",
-  "reason": "",
-  "linked": [],
-  "review": [
-    { "concept_type": "trait", "term": "fast-paced", "suggestions": ["enthusiasm", "intensity", "recklessness"],
-      "evidence": "best enthusiasm via 'energetic': mutual entailment 0.99, similarity 0.85" }
-  ]
-}
-```
-
-### POST /taxonomy/suggestions/{type}/{term}/approve
-A person confirms what an unknown word means. `type` is `skill` or `trait`.
-- **From that moment,** the word earns full synonym credit for every record that uses it, and for every later one. Affected matches are refreshed straight away.
-- **The approval survives reseeds.**
-
-| Body field | Required | Meaning |
-|---|---|---|
-| `concept` | no | The concept slug the word means. Leave the body out to accept the model's own best concept. |
-
-```bash
-curl -X POST http://127.0.0.1:8000/taxonomy/suggestions/skill/bargaining/approve \
-  -H "Content-Type: application/json" -d '{"concept": "negotiation"}'
-```
-
-```json
-{ "concept_type": "skill", "term": "bargaining", "outcome": "approved", "concept": "negotiation",
-  "evidence": "approved by a person; the model had said review" }
-```
-
-Errors:
-- `404`: no candidate or job uses the word;
-- `409`: it's already a taxonomy label;
-- `422`: an unknown concept or type, or no concept given when the model had none.
-
-No login: this would be for administrators only in production.
-
-### POST /taxonomy/suggestions/{type}/{term}/reject
-A person says the model's guess is wrong. The word loses any suggested credit, is never suggested again, and affected matches are refreshed straight away. The errors are the same as for approve.
-
-```bash
-curl -X POST http://127.0.0.1:8000/taxonomy/suggestions/skill/crisis-handling/reject
+curl -X PATCH http://127.0.0.1:8000/candidates/7 -H "Content-Type: application/json"   -d '{"skills": ["Persuasion", "Research", "Public Speaking", "Negotiation"]}'
 ```

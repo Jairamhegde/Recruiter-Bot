@@ -2,11 +2,8 @@ from fastapi import APIRouter, HTTPException, Query, status
 
 from recruiter_bot.api.schemas import JobMatches, JobSummary
 from recruiter_bot.db import connect
-from recruiter_bot.ingest.jobs.job_creator import JobExists, JobRejected, add_job
-from recruiter_bot.ingest.jobs.job_extractor import JobInput
-from recruiter_bot.ingest.jobs.job_updater import JobNotFound, JobPatch, update_job
-from recruiter_bot.matching import stored_matches_for_job
-from recruiter_bot.matching.profile_reader import load_job_profiles
+from recruiter_bot.ingest import JobInput, JobPatch, insert_job, update_job
+from recruiter_bot.matching.store import load_job_profiles, refresh_matches, stored_matches_for_job
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -23,14 +20,11 @@ def list_jobs() -> list[JobSummary]:
 def create_job(job: JobInput) -> JobMatches:
     """Stores a new job opening and returns its matching candidates, grouped by tier."""
     with connect() as conn:
-        try:
-            job_id = add_job(conn, job.model_dump())
-        except JobExists as error:
-            raise HTTPException(status_code=409, detail=str(error))
-        except JobRejected as error:
-            raise HTTPException(status_code=422, detail=str(error))
+        # One transaction, so the job never appears without its matches.
+        with conn.transaction():
+            job_id = insert_job(conn, job)
+            refresh_matches(conn, job_id=job_id)
         results = stored_matches_for_job(conn, job_id)
-
     return JobMatches.from_results(job_id, results)
 
 
@@ -38,16 +32,11 @@ def create_job(job: JobInput) -> JobMatches:
 def patch_job(job_id: int, patch: JobPatch) -> JobMatches:
     """Changes only the fields sent, then returns the job's refreshed matches."""
     with connect() as conn:
-        try:
-            update_job(conn, job_id, patch)
-        except JobNotFound as error:
-            raise HTTPException(status_code=404, detail=str(error))
-        except JobExists as error:
-            raise HTTPException(status_code=409, detail=str(error))
-        except JobRejected as error:
-            raise HTTPException(status_code=422, detail=str(error))
+        with conn.transaction():
+            if not update_job(conn, job_id, patch):
+                raise HTTPException(status_code=404, detail=f"No job with id {job_id}")
+            refresh_matches(conn, job_id=job_id)
         results = stored_matches_for_job(conn, job_id)
-
     return JobMatches.from_results(job_id, results)
 
 

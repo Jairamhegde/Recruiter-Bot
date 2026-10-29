@@ -1,5 +1,0 @@
-# Optional: the local models for linking unknown words. The API runs without them, on the rules alone.
-# Docker: WITH_MODELS=true docker compose up --build. Locally: pip install -r requirements-linking.txt
-numpy==2.5.4
-onnxruntime==1.31.1
-tokenizers==0.23.3

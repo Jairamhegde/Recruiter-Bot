@@ -2,38 +2,39 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_serializer
 
-from recruiter_bot.matching import CandidateProfile, JobProfile, StoredMatch
-from recruiter_bot.matching.candidate_view import Standing, order_for_candidate
-from recruiter_bot.matching.evidence import evidence_for
-from recruiter_bot.matching.recruiter_view import open_candidates, proactive_offers, shown_matches
+from recruiter_bot.matching.scorer import CandidateProfile, JobProfile
+from recruiter_bot.matching.store import StoredMatch
+from recruiter_bot.matching.views import (
+    Standing,
+    evidence_for,
+    open_candidates,
+    order_for_candidate,
+    proactive_offers,
+    shown_matches,
+)
 
 
 class CandidateSummary(BaseModel):
     candidate_id: int
-    name: str             # names may repeat; candidate_id and email tell people apart
-    email: str | None
+    name: str             # names may repeat; candidate_id tells people apart
     experience_years: int
     skills: list[str]
     traits: list[str]
-    job_preferences: list[str]  # stored, not yet used in matching
 
     @classmethod
     def from_profile(cls, profile: CandidateProfile) -> "CandidateSummary":
         return cls(
             candidate_id=profile.candidate_id,
             name=profile.full_name,
-            email=profile.email,
             experience_years=profile.experience_years,
             skills=profile.skills,
             traits=profile.traits,
-            job_preferences=profile.job_preferences,
         )
 
 
 class JobSummary(BaseModel):
     job_id: int
     title: str
-    company: str | None   # a title is unique within a company
     min_experience_years: int
     experience_requirement: str  # "required" or "preferred"
     required_skills: list[str]
@@ -44,7 +45,6 @@ class JobSummary(BaseModel):
         return cls(
             job_id=profile.job_id,
             title=profile.title,
-            company=profile.company,
             min_experience_years=profile.min_experience_years,
             experience_requirement=profile.experience_requirement,
             required_skills=profile.required_skills,
@@ -125,7 +125,6 @@ class JobMatch(OmitsEmptyBreakdown):
     rank: int             # 1 is the best job shown to this candidate
     job_id: int
     job_title: str
-    company: str | None
     score: float
     reason: str
     evidence: MatchEvidenceOut
@@ -133,18 +132,16 @@ class JobMatch(OmitsEmptyBreakdown):
     meets_minimum_experience: bool  # false: the candidate is below the job's minimum years
     tagline: str | None   # shown to the candidate, never scored
     # A yes or no only, so other candidates' scores stay private.
-    top_applicant: bool       # no open rival with a strong or possible match scores higher; orders tied jobs
-    matches_preference: bool  # the job's title is one of the candidate's job_preferences
+    top_applicant: bool   # no open rival with a strong or possible match scores higher; orders tied jobs
 
     @classmethod
     def from_result(
-        cls, result: StoredMatch, rank: int, standing: Standing, preferences: set[str], explain: bool,
+        cls, result: StoredMatch, rank: int, standing: Standing, explain: bool,
     ) -> "JobMatch":
         return cls(
             rank=rank,
             job_id=result.job_id,
             job_title=result.job_title,
-            company=result.job_company,
             score=result.score,
             reason=result.reason,
             evidence=MatchEvidenceOut.from_result(result),
@@ -152,7 +149,6 @@ class JobMatch(OmitsEmptyBreakdown):
             meets_minimum_experience=result.meets_minimum_experience,
             tagline=result.job_tagline,
             top_applicant=standing.is_top_applicant,
-            matches_preference=standing.job_slug in preferences,
         )
 
 
@@ -191,13 +187,13 @@ class JobMatchesByTier(BaseModel):
 
     @classmethod
     def from_results(
-        cls, results: list[StoredMatch], standings: dict[int, Standing], preferences: set[str], explain: bool,
+        cls, results: list[StoredMatch], standings: dict[int, Standing], explain: bool,
     ) -> "JobMatchesByTier":
         """Results must already be in the candidate's order, so the rank is simply the position."""
         shown, near_misses_included = shown_matches(results)
         groups = cls(near_misses_included=near_misses_included)
         for rank, result in enumerate(shown, start=1):
-            job = JobMatch.from_result(result, rank, standings[result.job_id], preferences, explain)
+            job = JobMatch.from_result(result, rank, standings[result.job_id], explain)
             getattr(groups, result.tier).append(job)
         return groups
 
@@ -236,11 +232,10 @@ class CandidateMatches(BaseModel):
 
     @classmethod
     def from_results(
-        cls, candidate_id: int, results: list[StoredMatch], standings: dict[int, Standing],
-        preferences: set[str], explain: bool = False,
+        cls, candidate_id: int, results: list[StoredMatch], standings: dict[int, Standing], explain: bool = False,
     ) -> "CandidateMatches":
         ordered = order_for_candidate(results, standings)
-        matches = JobMatchesByTier.from_results(ordered, standings, preferences, explain)
+        matches = JobMatchesByTier.from_results(ordered, standings, explain)
         return cls(candidate_id=candidate_id, matches=matches)
 
 

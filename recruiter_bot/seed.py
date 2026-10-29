@@ -1,124 +1,54 @@
-"""Loads seed/*.json into the database. Usage: python -m recruiter_bot.seed"""
+"""Loads seed/*.json into the database, then computes every match. Usage: python -m recruiter_bot.seed
+
+Safe to run again: each seed file is loaded once, like a migration, and recorded in seed_runs.
+The taxonomy is reloaded and every match recomputed on every run.
+"""
+import json
 import sys
-from datetime import date
 from pathlib import Path
 
+from pydantic import BaseModel, ValidationError
+
 from recruiter_bot.db import connect
-from recruiter_bot.ingest import (
-    TermReport,
-    build_candidate_batch,
-    build_job_batch,
-    build_term_report,
-    extract_candidates,
-    extract_jobs,
-    insert_batch,
-    log_rejected,
-    read_json_records,
-    read_taxonomy,
-    save_taxonomy,
-)
-from recruiter_bot.ingest.batch_inserter import INGEST_LOCK_SQL
-from recruiter_bot.ingest.taxonomy.term_linker import LinkResult, link_all_terms
-from recruiter_bot.matching import refresh_all_matches
+from recruiter_bot.ingest import CandidateInput, JobInput, insert_candidate, insert_job
+from recruiter_bot.matching.store import refresh_matches
+from recruiter_bot.taxonomy import load_taxonomy_file
 
 SEED_DIR = Path(__file__).resolve().parent.parent / "seed"
 
-EXISTING_CANDIDATE_KEYS_SQL = "SELECT source_key FROM candidates WHERE source_key = ANY(%s)"
-
-EXISTING_JOB_KEYS_SQL = "SELECT source_key FROM jobs WHERE source_key = ANY(%s)"
-
-
-def _not_yet_stored(conn, existing_keys_sql: str, records: list) -> list:
-    """Seed records are recognised by their source key ('seed:<slug>'), not by name."""
-    keys = [record.source_key for record in records]
-    stored = {key for (key,) in conn.execute(existing_keys_sql, (keys,)).fetchall()}
-    return [record for record in records if record.source_key not in stored]
+# Records the file and tells the caller whether this run is the one that loads it.
+# Two runs at once can't both load it: the primary key lets only one insert succeed.
+CLAIM_SEED_FILE_SQL = "INSERT INTO seed_runs (filename) VALUES (%s) ON CONFLICT DO NOTHING RETURNING filename"
 
 
-def run(today: date | None = None) -> None:
-    # Validated before any write, so a bad taxonomy file changes nothing.
-    taxonomy = read_taxonomy(SEED_DIR / "taxonomy.json")
-
-    with connect() as conn:
-        # The database clock is the one 'today', so dates don't depend on the runner's timezone.
-        if today is None:
-            today = conn.execute("SELECT current_date").fetchone()[0]
-            conn.commit()
-
-        candidate_extraction = extract_candidates(read_json_records(SEED_DIR / "candidate_data.json"), today)
-        job_extraction = extract_jobs(read_json_records(SEED_DIR / "job_data.json"))
-
-        log_rejected(conn, "candidate", "seed", candidate_extraction.rejected)
-        log_rejected(conn, "job", "seed", job_extraction.rejected)
-        _print_rejections("candidate", candidate_extraction.rejected)
-        _print_rejections("job", job_extraction.rejected)
-
-        # One transaction for profiles, taxonomy and matches, so readers never see one without the others.
-        with conn.transaction():
-            conn.execute(INGEST_LOCK_SQL)
-            # Stored records are never overwritten, so PATCH edits survive.
-            new_candidates = _not_yet_stored(conn, EXISTING_CANDIDATE_KEYS_SQL, candidate_extraction.records)
-            new_jobs = _not_yet_stored(conn, EXISTING_JOB_KEYS_SQL, job_extraction.records)
-            result = insert_batch(conn, build_candidate_batch(new_candidates), build_job_batch(new_jobs), source="seed")
-            taxonomy_result = save_taxonomy(conn, taxonomy)
-            # The reload removed every automatic label; the same rules recreate them.
-            link_result = link_all_terms(conn)
-            match_count = refresh_all_matches(conn)
-        term_report = build_term_report(conn, taxonomy)
-
-    kept = len(candidate_extraction.records) - len(new_candidates) + len(job_extraction.records) - len(new_jobs)
-    print(
-        f"Seeded {result.candidates} new candidates and {result.jobs} new jobs; "
-        f"{kept} records were already stored and kept as they are "
-        f"({len(candidate_extraction.rejected)} candidate and {len(job_extraction.rejected)} job records rejected)."
-    )
-    print(
-        f"Loaded the taxonomy: {taxonomy_result.concepts} concepts, {taxonomy_result.labels} labels, "
-        f"{taxonomy_result.relations} relations (one row per direction)."
-    )
-    print(f"Stored {match_count} matches.")
-    _print_link_result(link_result)
-    _print_term_report(term_report)
+def read_records(filename: str, model: type[BaseModel]) -> list[BaseModel]:
+    """Valid records only; each bad one is reported and skipped, so it doesn't block the rest."""
+    records = []
+    for index, raw in enumerate(json.loads((SEED_DIR / filename).read_text(encoding="utf-8"))):
+        try:
+            records.append(model.model_validate(raw))
+        except ValidationError as error:
+            print(f"rejected {filename} #{index}: {error.errors()[0]['msg']}", file=sys.stderr)
+    return records
 
 
-def _print_link_result(result: LinkResult) -> None:
-    if result.model_status == "on":
-        print(f"model linking: on ({len(result.suggested)} suggested links, {len(result.review)} words for review)")
-    else:
-        print(f"model linking: {result.model_status}, rules only ({result.model_reason})")
-    for link in result.suggested:
-        print(f"suggested {link.concept_type} {link.term} -> {link.concept}, capped credit ({link.evidence})")
-    for concept_type, term, suggestions in result.review:
-        print(f"for review: {concept_type} {term} might be {', '.join(suggestions)}")
-    for term, error in result.model_failed:
-        print(f"model linking skipped {term}: {error}")
-    for link in result.links:
-        print(f"linked {link.concept_type} {link.term} -> {link.concept} ({link.method}: {link.evidence})")
-    for term, negates in result.negated:
-        print(f"not linked, negated: {term} ({negates})")
-    for term, concepts in result.ambiguous:
-        print(f"not linked, ambiguous: {term} could be {', '.join(concepts)}")
+def run() -> None:
+    # One transaction for profiles, taxonomy and matches, so readers never see one without the others.
+    with connect() as conn, conn.transaction():
+        loaded = []
+        for filename, model, insert in (("candidate_data.json", CandidateInput, insert_candidate),
+                                        ("job_data.json", JobInput, insert_job)):
+            if conn.execute(CLAIM_SEED_FILE_SQL, (filename,)).fetchone() is None:
+                continue  # loaded on an earlier run; edits made since through the API are kept
+            records = read_records(filename, model)
+            for record in records:
+                insert(conn, record)
+            loaded.append(f"{len(records)} records from {filename}")
+        concepts, relations = load_taxonomy_file(conn, SEED_DIR / "taxonomy.json")
+        match_count = refresh_matches(conn)
 
-
-def _print_term_report(report: TermReport) -> None:
-    if report.unknown_skills:
-        print(f"unknown skills (no taxonomy label): {', '.join(report.unknown_skills)}")
-    if report.unknown_traits:
-        print(f"unknown traits (no taxonomy label): {', '.join(report.unknown_traits)}")
-    for hint in report.hints:
-        print(f"review hint: {hint.concept_type} {hint.term} may be a label of {hint.concept} "
-              f"(like {', '.join(hint.like)})")
-
-    for vocabulary_name, terms in (("skills", report.unmatched_skills), ("traits", report.unmatched_traits)):
-        for side, label in (("candidate", "no job asks for"), ("job", "no candidate covers")):
-            slugs = [slug for slug, term_side in terms if term_side == side]
-            if slugs:
-                print(f"unmatched {vocabulary_name} {label}: {', '.join(slugs)}")
-
-
-def _print_rejections(entity_type: str, rejected: list) -> None:
-    for error in rejected:
-        print(f"rejected {entity_type} #{error.index}: {error.message}", file=sys.stderr)
+    print(f"Seeded {', '.join(loaded)}." if loaded else "Seed files were already loaded; nothing added.")
+    print(f"Loaded the taxonomy: {concepts} concepts, {relations} related pairs. Stored {match_count} matches.")
 
 
 if __name__ == "__main__":

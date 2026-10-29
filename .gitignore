@@ -36,9 +36,6 @@ desktop.ini
 # Logs
 *.log
 
-# Downloaded model files (python -m recruiter_bot.linking.model_files)
-models/
-
 # Claude Code local settings
 .claude/settings.local.json
 
