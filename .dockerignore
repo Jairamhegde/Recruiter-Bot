@@ -1,7 +1,6 @@
 .git
 .venv
 venv
-models
 tests
 docs
 **/__pycache__

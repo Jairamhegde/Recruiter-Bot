@@ -11,27 +11,40 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      test: [ "CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}" ]
       interval: 5s
       timeout: 3s
       retries: 10
 
   api:
-    build:
-      context: .
-      args:
-        # WITH_MODELS=true docker compose up --build adds the optional model stage (D-54).
-        WITH_MODELS: ${WITH_MODELS:-false}
+    build: .
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-recruiter}:${POSTGRES_PASSWORD:-recruiter}@db:5432/${POSTGRES_DB:-recruiter_bot}
-      # "off" keeps word linking to the deterministic rules even when the models are installed (D-54).
-      MODEL_LINKING: ${MODEL_LINKING:-auto}
+      # The address printed at startup for you to open.
+      PUBLIC_URL: http://127.0.0.1:${API_PORT:-8000}
     ports:
       # Set API_PORT if 8000 is already in use on this machine.
       - "127.0.0.1:${API_PORT:-8000}:8000"
     depends_on:
       db:
-        # Waits until Postgres answers, not just until its container exists (D-23).
+        # Waits until Postgres answers, not just until its container exists.
+        condition: service_healthy
+
+  # Part 2: runs SQL_DETECTIVE_CHALLENGE.sql and prints every answer. Not started by "up".
+  # Run it with: docker compose run --rm sql-detective
+  sql-detective:
+    image: postgres:16-alpine
+    profiles: ["sql-detective"]
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:-recruiter}
+    volumes:
+      - ./SQL_DETECTIVE:/sql:ro
+    # The file creates its own schema (sql_detective), so it never touches the app's tables.
+    command: >
+      psql -h db -U ${POSTGRES_USER:-recruiter} -d ${POSTGRES_DB:-recruiter_bot}
+           -v ON_ERROR_STOP=1 -f /sql/SQL_DETECTIVE_CHALLENGE.sql
+    depends_on:
+      db:
         condition: service_healthy
 
 volumes:

@@ -6,7 +6,7 @@ import pytest
 
 from recruiter_bot import seed
 from recruiter_bot.db import DEFAULT_DATABASE_URL, connect
-from recruiter_bot.migrate import CREATE_HISTORY_SQL, apply_pending
+from recruiter_bot.migrate import apply_pending
 
 TEST_DATABASE_NAME = "recruiter_bot_test"
 
@@ -27,12 +27,10 @@ def test_database():
 
     environment = pytest.MonkeyPatch()
     environment.setenv("DATABASE_URL", test_url)
-    environment.setenv("MODEL_LINKING", "off")
 
     try:
         with connect() as connection:
             connection.autocommit = True
-            connection.execute(CREATE_HISTORY_SQL)
             apply_pending(connection)
 
         seed.run()

@@ -2,8 +2,7 @@ import os
 
 import psycopg
 
-# 127.0.0.1, not localhost: on Windows "localhost" tries IPv6 first, and Docker
-# Desktop holds that connection open without answering.
+# 127.0.0.1, not localhost: on Windows, localhost tries IPv6 first and Docker leaves it hanging.
 DEFAULT_DATABASE_URL = "postgresql://recruiter:recruiter@127.0.0.1:5433/recruiter_bot"
 
 
