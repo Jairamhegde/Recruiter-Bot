@@ -4,7 +4,7 @@ import psycopg
 
 from recruiter_bot.ingest.text_normalizer import compact_key, root_key
 
-# D-41, stage 1: a word containing one of these is negated and never linked.
+# Stage 1: a word containing one of these is negated and never linked.
 NEGATING_WORDS = {"not", "no", "non", "never", "without", "lack", "lacks", "lacking",
                   "poor", "weak", "bad", "terrible", "unable"}
 # A word starting with one of these is negated only if the rest is a known label.
@@ -16,7 +16,7 @@ class Link:
     term: str
     concept_type: str
     concept: str   # concept slug
-    method: str    # "root_key", "typo", "group", or "model" for a suggested link (D-54)
+    method: str    # "root_key", "typo", "group", or "model" for a suggested link
     evidence: str  # the label it matched, or the words grouped together
 
 
@@ -25,7 +25,7 @@ class LinkResult:
     links: list[Link]
     negated: list[tuple[str, str]]          # (term, what it negates)
     ambiguous: list[tuple[str, list[str]]]  # (term, the concepts it could mean)
-    # The optional model stage (D-54), for words the rules left unplaced:
+    # The optional model stage, for words the rules left unplaced:
     suggested: list[Link] = field(default_factory=list)                 # capped "suggested" credit
     review: list[tuple[str, str, list[str]]] = field(default_factory=list)  # (type, term, suggestions)
     model_status: str = "off"                                           # "on", "off" or "unavailable"
@@ -44,8 +44,7 @@ HAS_CURATED_LABEL_SQL = """
     )
 """
 
-# Only reviewed labels, or a provisional concept's preferred label, can attract a word,
-# so automatic links never chain from one automatic label to the next.
+# Only reviewed labels can attract a word, so automatic links never chain.
 CONCEPTS_WITH_ROOT_SQL = """
     SELECT DISTINCT ON (concepts.concept_id) concepts.concept_id, concepts.slug, concept_labels.label
     FROM concept_labels
@@ -57,8 +56,7 @@ CONCEPTS_WITH_ROOT_SQL = """
     ORDER BY concepts.concept_id, concept_labels.label
 """
 
-# The one scan (D-41): labels of one type, narrowed by key length. Same rule as above:
-# reviewed labels, or a provisional concept's preferred label.
+# The one scan: labels of one type, narrowed by key length.
 TYPO_CANDIDATES_SQL = """
     SELECT concepts.concept_id, concepts.slug, concept_labels.label, concept_labels.root_key
     FROM concept_labels
@@ -104,8 +102,7 @@ ALL_VOCABULARY_SQL = {
 
 
 def link_terms(conn: psycopg.Connection, concept_type: str, terms: list[str]) -> LinkResult:
-    """Links each term that has no label, by the deterministic stages of D-41, then passes the words
-    still unplaced to the optional model stage (D-54). Run inside the caller's transaction."""
+    """Links unlabelled terms by the rules, then by the optional model stage."""
     links = []
     negated = []
     ambiguous = []
@@ -145,7 +142,7 @@ def link_terms(conn: psycopg.Connection, concept_type: str, terms: list[str]) ->
 
 
 def _with_model_stage(conn: psycopg.Connection, concept_type: str, result: LinkResult, unplaced: list[str]) -> LinkResult:
-    """Adds what the model stage concluded. It never raises, so the rules' result always stands (D-54)."""
+    """Adds what the model stage concluded. It never raises, so the rules' result always stands."""
     # Imported here: the model stage is optional, and its heavy libraries load only when it runs.
     from recruiter_bot.linking.model_stage import suggest_for_unknown_terms
 
@@ -157,8 +154,7 @@ def _with_model_stage(conn: psycopg.Connection, concept_type: str, result: LinkR
 
 
 def link_record_terms(conn: psycopg.Connection, skills: list[str] | None, traits: list[str] | None) -> list[Link]:
-    """For POST and PATCH: links the words one record brings, then refreshes the other records
-    that use a newly linked word. The caller still refreshes the record itself."""
+    """Links one record's new words, then refreshes the other records that use them."""
     links = []
     for concept_type, terms in (("skill", skills), ("trait", traits)):
         if terms:
@@ -177,7 +173,7 @@ def link_record_terms(conn: psycopg.Connection, skills: list[str] | None, traits
 
 def link_all_terms(conn: psycopg.Connection) -> LinkResult:
     """After a taxonomy load: fills missing root keys, then links the whole vocabulary."""
-    # The taxonomy may have changed, so every model decision is made again (D-54).
+    # The taxonomy may have changed, so every model decision is made again.
     from recruiter_bot.linking.model_stage import clear_suggestions
     clear_suggestions(conn)
 
@@ -223,9 +219,7 @@ def _negates(conn: psycopg.Connection, concept_type: str, term: str) -> str | No
 
 
 def _typo_match(conn: psycopg.Connection, concept_type: str, key: str) -> tuple[int, str, str] | None:
-    """The single closest concept that differs by a typo in exactly one word, or None (D-41).
-    Per word, not per key: 'product' and 'project' are two edits apart in a seven-letter word,
-    so product-management never becomes project-management."""
+    """The one concept a typo away, in exactly one word, or None."""
     words = key.split("-")
     best_distance = 3
     best = {}

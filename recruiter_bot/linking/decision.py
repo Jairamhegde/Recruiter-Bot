@@ -1,12 +1,4 @@
-"""Stage 6: turn the verified candidates into one decision per unknown word (D-45).
-
-- auto_link: confident enough to add the word as a synonym of the concept, without a person.
-- review:    plausibly right, so a person decides; the top suggestions are kept for them.
-- no_match:  nothing close enough; the word stays unknown and earns no credit, as before.
-
-A wrong automatic link is worse than a missing one, so the thresholds were chosen on the
-calibration cases to make no wrong automatic links there, then judged once on the test cases.
-"""
+"""Stage 6: one decision per unknown word: auto_link, review or no_match."""
 from dataclasses import dataclass
 
 from recruiter_bot.linking.verification import Verification
@@ -15,11 +7,7 @@ SUGGESTION_COUNT = 3
 # A word goes to review when it more likely than not implies the concept, in either direction.
 REVIEW_ENTAILMENT = 0.5
 
-# Off (D-45): on the untouched test cases the automatic rule reached 67% precision, far below the 98%
-# target, mostly by linking related words as synonyms. Until a larger labelled set shows otherwise,
-# a confident match becomes the first review suggestion instead of a link.
-# D-54: ingestion asks for the confident outcome (automatic_linking=True) but never makes it a synonym:
-# it earns only capped "suggested" credit. Counted that way, 11 of the 12 confident test links were acceptable.
+# Off: 67% precision on held-out words, against a 98% target.
 AUTOMATIC_LINKING = False
 
 
@@ -30,9 +18,7 @@ class Thresholds:
     margin: float             # and the best candidate must beat the second by at least this much
 
 
-# Chosen by `python -m recruiter_bot.linking.evaluate calibrate` (D-45): on the calibration cases,
-# the setting with no wrong automatic links and the most right ones. In words: link automatically
-# only when one concept clearly beats every other candidate.
+# Calibrated thresholds: link only when one concept clearly beats the rest.
 THRESHOLDS = Thresholds(mutual_entailment=0.50, similarity=0.86, margin=0.30)
 
 

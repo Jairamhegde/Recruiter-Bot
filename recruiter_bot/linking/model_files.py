@@ -1,10 +1,4 @@
-"""Downloads the two model files the linking stages need (D-42).
-
-Usage: python -m recruiter_bot.linking.model_files
-
-Every file comes from a pinned commit and is checked against its SHA-256 before use,
-so a model can never change underneath the matching without a code change.
-"""
+"""Downloads the two pinned, hash-checked model files. Usage: python -m recruiter_bot.linking.model_files"""
 import hashlib
 import shutil
 import sys
@@ -39,8 +33,7 @@ class ModelFile:
         return MODELS_DIR / self.local_name
 
 
-# The SHA-256 of each .onnx file is the one Hugging Face publishes for it (Git LFS).
-# The JSON files aren't in Git LFS, so their hashes were computed once from the pinned commit.
+# Pinned SHA-256 per file: Hugging Face's for .onnx, computed once for the JSON files.
 MODEL_FILES = [
     ModelFile(EMBEDDING_REPOSITORY, EMBEDDING_COMMIT, "onnx/model_quantized.onnx", "embedding/model.onnx",
               34014426, "6c9c6101a956d62dfb5e7190c538226c0c5bb9cb27b651234b6df063ee7dbfe4"),

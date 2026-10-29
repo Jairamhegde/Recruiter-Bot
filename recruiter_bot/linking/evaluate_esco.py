@@ -1,15 +1,4 @@
-"""How well unknown words are placed, judged on ESCO's own labels instead of ours (D-55).
-
-Usage: python -m recruiter_bot.linking.evaluate_esco        (needs the model files)
-
-- Positives: 20% of the ESCO synonyms imported into the taxonomy, chosen by a hash of the word,
-  are hidden from the system. Each one should find its way back to its concept.
-- Look-alikes: other ESCO concepts the ESCO search returned for our words, such as "negotiate land access"
-  for negotiation. ESCO defines each as a different concept, so none of them should earn credit.
-Neither list was written by us, so the result doesn't depend on our own judgement of what's right.
-
-The thresholds are the ones fixed in D-45, chosen before this test existed, so this is a clean test of them.
-"""
+"""Judges word placement on ESCO's own labels. Usage: python -m recruiter_bot.linking.evaluate_esco"""
 import hashlib
 import json
 import math
@@ -81,7 +70,7 @@ def evaluate(cases: list[Case], taxonomy, models) -> list[Outcome]:
 
     outcomes = []
     for case in cases:
-        # The word-root rule of D-41 (the typo rule needs the database and is left out here).
+        # The word-root rule (the typo rule needs the database and is left out here).
         by_root = concepts_by_root.get((case.concept_type, root_key(case.term)), set())
         if len(by_root) == 1:
             outcomes.append(Outcome(case, "rules", "credit", next(iter(by_root))))

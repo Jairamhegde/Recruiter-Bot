@@ -1,4 +1,4 @@
-"""Ranks one job's candidates with a set of weights, and compares two such rankings (D-48)."""
+"""Ranks one job's candidates with a set of weights, and compares two such rankings."""
 from dataclasses import dataclass
 
 from recruiter_bot.matching.match_scorer import tier_for
@@ -14,11 +14,7 @@ class RankedCandidate:
 
 
 def rank_candidates(matches: list[StoredMatch], weights: Weights) -> list[RankedCandidate]:
-    """One job's candidates, best first, scored with these weights.
-
-    The order is score, then skill score, then name. The API also uses availability
-    between equal scores (D-16); it's left out here because no weight changes it.
-    """
+    """One job's candidates, best first, scored with these weights."""
     rescored = []
     for match in matches:
         score = recompute_score(match.skill_score, match.experience_score, match.culture_score, weights)
@@ -39,13 +35,7 @@ def top_candidate(ranking: list[RankedCandidate]) -> str | None:
 
 
 def top_change(baseline: list[RankedCandidate], variant: list[RankedCandidate]) -> str:
-    """'same', 'tie' or 'flip' for the first place.
-
-    - same: the baseline winner is still first.
-    - tie:  someone else is listed first, but the baseline winner has exactly the same score.
-            Only the tie-break order moved; nobody became a better fit.
-    - flip: someone else now has a strictly higher score than the baseline winner.
-    """
+    """'same', 'tie' or 'flip' for first place; a flip needs a strictly higher score."""
     baseline_winner = top_candidate(baseline)
     if top_candidate(variant) == baseline_winner:
         return "same"
@@ -71,11 +61,7 @@ def tier_changes(baseline: list[RankedCandidate], variant: list[RankedCandidate]
 
 
 def rank_agreement(baseline: list[RankedCandidate], variant: list[RankedCandidate]) -> float:
-    """Kendall's tau: 1.0 when the two orders are identical, 0 when unrelated, -1.0 when reversed.
-
-    It looks at every pair of candidates and asks: do both rankings put this pair in the same order?
-    A pair with exactly the same score in the variant is skipped: a tie is not a disagreement.
-    """
+    """Kendall's tau between two orders; pairs tied in the variant are skipped."""
     position_in_variant = {}
     score_in_variant = {}
     for position, candidate in enumerate(variant):

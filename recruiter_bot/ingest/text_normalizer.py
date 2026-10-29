@@ -38,7 +38,7 @@ def compact_key(slug: str) -> str:
     return slug.replace("-", "")
 
 
-# D-41: words dropped from a root key, and the suffixes stripped from each word.
+# Words dropped from a root key, and the suffixes stripped from each word.
 ROOT_FILLER_WORDS = {"a", "an", "the", "of", "in", "on", "for", "to", "with", "and", "skill", "skills"}
 ROOT_SUFFIXES = ("ments", "ment", "ings", "ing", "ions", "ion", "ed", "es", "s")
 MIN_ROOT_LENGTH = 4
@@ -53,7 +53,7 @@ def root_key(slug: str) -> str:
 
 
 def _root_word(word: str) -> str:
-    """Deliberately conservative: a missed match costs less than a wrong one (D-41)."""
+    """Deliberately conservative: a missed match costs less than a wrong one."""
     stripped = False
     for suffix in ROOT_SUFFIXES:
         if not word.endswith(suffix) or len(word) - len(suffix) < MIN_ROOT_LENGTH:

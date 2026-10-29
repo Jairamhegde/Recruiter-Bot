@@ -1,18 +1,4 @@
-"""The optional model stage of word linking, wired into ingestion (D-54).
-
-It runs only on words the deterministic rules (D-41) couldn't place, and only when it can:
-- MODEL_LINKING=off turns it off;
-- missing libraries (numpy, onnxruntime, tokenizers) or model files turn it off;
-- a model that fails to load turns it off for the rest of the process.
-In each case ingestion carries on with the rules alone, exactly as before this stage existed.
-A failure on one word skips that word, and a failed write rolls back only its own savepoint,
-so the model stage can never fail the POST, the PATCH or the seed that called it.
-
-What it decides, per word (stage 6, D-45):
-- linked: one concept is a confident match, so the word earns capped "suggested" credit toward it (D-54);
-- review: some concepts are plausible, so they are kept, best first, for a person to decide;
-- nothing: no concept is plausible; the word stays unknown and earns no credit.
-"""
+"""The optional model stage for unknown words; any failure falls back to the rules alone."""
 import logging
 import os
 from dataclasses import dataclass
@@ -25,11 +11,11 @@ log = logging.getLogger(__name__)
 TAXONOMY_PATH = Path(__file__).resolve().parent.parent.parent / "seed" / "taxonomy.json"
 
 # Stored with every row, so a later model or threshold change can tell which rows it made.
-MODEL_VERSION = "bge-small-en-v1.5 + nli-deberta-v3-xsmall, D-45 thresholds"
+MODEL_VERSION = "bge-small-en-v1.5 + nli-deberta-v3-xsmall, calibrated thresholds"
 
 HAS_SUGGESTION_SQL = "SELECT EXISTS (SELECT 1 FROM term_suggestions WHERE concept_type = %s AND term = %s)"
 
-# Only the model's own conclusions: a person's approved or rejected decision is kept (D-55).
+# Only the model's own conclusions: a person's approved or rejected decision is kept.
 CLEAR_SUGGESTIONS_SQL = "DELETE FROM term_suggestions WHERE outcome IN ('linked', 'review')"
 
 INSERT_SUGGESTION_SQL = """
@@ -138,8 +124,7 @@ def suggest_for_unknown_terms(conn: psycopg.Connection, concept_type: str, terms
     suggestions = []
     failed = []
     for term in sorted(set(terms)):
-        # Every database step runs in its own savepoint: a failed statement would otherwise abort
-        # the caller's whole transaction, and with it the POST, PATCH or seed.
+        # Each database step has its own savepoint, so a failure never aborts the caller's transaction.
         try:
             with conn.transaction():
                 decided_before = conn.execute(HAS_SUGGESTION_SQL, (concept_type, term)).fetchone()[0]

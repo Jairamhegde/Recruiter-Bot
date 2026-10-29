@@ -7,7 +7,7 @@ from recruiter_bot.matching.match_scorer import ALGORITHM_VERSION, MatchResult, 
 from recruiter_bot.matching.profile_reader import load_candidate_profiles, load_job_profiles
 from recruiter_bot.matching.term_credit import TermCredit, load_taxonomy_credit
 
-# ---- Writing (D-37): replace an entity's rows, never append
+# ---- Writing: replace an entity's rows, never append
 
 DELETE_CANDIDATE_MATCHES_SQL = "DELETE FROM matches WHERE candidate_id = %s"
 
@@ -79,7 +79,7 @@ JOBS_USING_TERMS_SQL = {
 
 
 def refresh_matches_for_terms(conn: psycopg.Connection, terms_by_type: dict[str, list[str]]) -> None:
-    """Refreshes only the candidates and jobs that use these terms, e.g. after a word was linked (D-41)."""
+    """Refreshes only the candidates and jobs that use these terms, e.g. after a word was linked."""
     candidate_ids = set()
     job_ids = set()
     for concept_type, terms in terms_by_type.items():
@@ -128,13 +128,13 @@ def refresh_if_stale(conn: psycopg.Connection) -> bool:
     return False
 
 
-# ---- Reading: only rows from the current algorithm version, best first (D-16)
+# ---- Reading: only rows from the current algorithm version, best first
 
 @dataclass(frozen=True)
 class StoredMatch:
     job_id: int
     job_title: str
-    job_company: str | None  # tells apart jobs with the same title (D-53)
+    job_company: str | None  # tells apart jobs with the same title
     candidate_id: int
     candidate_name: str
     score: float
@@ -146,13 +146,13 @@ class StoredMatch:
     matched_culture: list[str]
     missing_culture: list[str]
     reason: str
-    # The inputs behind the experience score, for the evidence (D-50).
+    # The inputs behind the experience score, for the evidence.
     candidate_experience_years: int
     job_min_experience_years: int
-    # Shown, never scored (D-06): the recruiter reads the quirk, the candidate reads the tagline.
+    # Shown, never scored: the recruiter reads the quirk, the candidate reads the tagline.
     candidate_quirk: str | None
     job_tagline: str | None
-    candidate_is_open: bool  # open to opportunities; decides the recruiter's two sections (D-49)
+    candidate_is_open: bool  # open to opportunities; decides the recruiter's two sections
 
     @property
     def meets_minimum_experience(self) -> bool:
@@ -179,13 +179,7 @@ MATCHES_FOR_CANDIDATE_SQL = STORED_MATCHES_SELECT + """
     ORDER BY matches.score DESC, matches.skill_score DESC, jobs.title
 """
 
-# D-16: the best fit first; among equal scores, whoever can start soonest.
-# 1. score
-# 2. open candidates before those not looking
-# 3. the earliest start date; a date in the past counts as today, since "Immediate"
-#    is stored as the day it was loaded
-# 4. still tied: a hash of the job and candidate ids. It gives the same order every time,
-#    but favours no one: sorting by name would always put Aaron before Zoe, for every job.
+# Score, open before not looking, earliest start (past counts as today), then a neutral hash.
 MATCHES_FOR_JOB_SQL = STORED_MATCHES_SELECT + """
     WHERE matches.job_id = %s AND matches.algorithm_version = %s
     ORDER BY matches.score DESC,

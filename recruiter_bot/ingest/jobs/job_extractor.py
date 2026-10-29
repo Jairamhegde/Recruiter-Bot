@@ -12,10 +12,10 @@ class JobInput(BaseModel):
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 
     title: str = Field(min_length=1)
-    company: str | None = Field(default=None, min_length=1)  # optional; a title is unique within a company (D-53)
+    company: str | None = Field(default=None, min_length=1)  # optional; a title is unique within a company
     required_skills: list[str] = Field(min_length=1)
     min_experience_years: int = Field(ge=0, le=70, strict=True)
-    # D-56: "required" (the default) makes the minimum a must; "preferred" makes it count, never exclude.
+    # "required" (the default) makes the minimum a must; "preferred" makes it count, never exclude.
     experience_requirement: Literal["required", "preferred"] = "required"
     culture_keywords: list[str] = []
     tagline: str | None = None

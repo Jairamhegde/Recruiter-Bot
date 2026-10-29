@@ -1,14 +1,4 @@
-"""The three weights of the match score, and how to recompute a score with different ones (D-48).
-
-The production formula (D-32) is:
-
-    score = 100 x (skills_weight x skill_score
-                   + experience_weight x experience_score
-                   + culture_weight x culture_score)
-
-When a job lists no culture keywords there is no culture score, and the two remaining
-weights are rescaled so they still add up to 1.
-"""
+"""The match score's three weights, and rescoring with other weights."""
 from dataclasses import dataclass
 
 from recruiter_bot.matching.match_scorer import CULTURE_WEIGHT, EXPERIENCE_WEIGHT, SKILL_WEIGHT

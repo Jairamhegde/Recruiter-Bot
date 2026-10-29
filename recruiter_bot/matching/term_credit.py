@@ -15,19 +15,18 @@ class Credit:
 NO_CREDIT = Credit(0.0, "none")
 EXACT = Credit(1.0, "exact")
 
-# D-54: a word the model linked to a concept, with no person checking it yet. Half of "related",
-# so a model guess can never count as much as a curated relation, let alone a synonym.
+# A model-linked word earns half of 'related', never as much as a curated link.
 SUGGESTED_CREDIT = 0.25
 
 
 class TermCredit(Protocol):
-    """How much a candidate term earns toward a job term (D-32). The scorer only sees this."""
+    """How much a candidate term earns toward a job term. The scorer only sees this."""
 
     def credit(self, concept_type: str, candidate_term: str, job_term: str) -> Credit: ...
 
 
 class ExactCredit:
-    """Identical terms only, compared by compact key (D-26)."""
+    """Identical terms only, compared by compact key."""
 
     def credit(self, concept_type: str, candidate_term: str, job_term: str) -> Credit:
         if compact_key(candidate_term) == compact_key(job_term):
@@ -36,8 +35,7 @@ class ExactCredit:
 
 
 class TaxonomyCredit:
-    """Same term or same concept 1.0, related concept per its relation, a model-suggested link 0.25,
-    anything else 0 (D-29, D-54)."""
+    """Same concept 1.0, related per its relation, model-suggested 0.25, else 0."""
 
     def __init__(
         self,
@@ -70,11 +68,7 @@ class TaxonomyCredit:
         self, concept_type: str, candidate_term: str, job_term: str,
         candidate_concept: int | None, job_concept: int | None,
     ) -> Credit:
-        """One side is unknown to the taxonomy, but the model linked it to the other side's concept (D-54).
-
-        Only one guess per pair: two unknown words suggested to the same concept earn nothing,
-        and a suggestion never travels through a relation to a third concept.
-        """
+        """Credit when the model linked one side to the other's concept; one guess per pair."""
         if candidate_concept is None and job_concept is not None:
             suggested = self._suggested_concept.get((concept_type, compact_key(candidate_term)))
             if suggested == job_concept:
@@ -90,8 +84,7 @@ CONCEPT_LABELS_SQL = "SELECT concept_type, compact_key, concept_id FROM concept_
 
 CONCEPT_RELATIONS_SQL = "SELECT from_concept_id, to_concept_id, credit FROM concept_relations"
 
-# A confident model link earns suggested credit (D-54); a word a person approved is a synonym (D-55).
-# Words for review and rejected words earn nothing.
+# Model-linked words earn suggested credit; approved words are synonyms.
 SUGGESTED_LINKS_SQL = """
     SELECT term_suggestions.concept_type, term_suggestions.term, term_suggestions.outcome, concepts.concept_id
     FROM term_suggestions

@@ -1,4 +1,14 @@
-# Entity-Relationship Diagram
+# Architecture and ER Diagram
+
+## Architecture: how it works
+
+What goes in, the four steps, and what comes out, in plain words.
+
+![How Recruiter Bot works](architecture.png)
+
+The image is exported from [`architecture.drawio`](architecture.drawio).
+
+## Entity-Relationship Diagram
 
 The schema in [`migrations/001_init.sql`](../migrations/001_init.sql).
 
@@ -12,7 +22,7 @@ erDiagram
         bigint      skill_id     PK
         text        slug         UK "normalized, e.g. systems-design"
         text        compact_key  UK "generated: slug without hyphens"
-        text        root_key        "groups unknown words (D-41)"
+        text        root_key        "groups unknown words"
         timestamptz created_at
     }
     TRAITS {
@@ -152,7 +162,7 @@ erDiagram
 
 Skills and traits connect to concepts by spelling, not by a foreign key: a word belongs to the concept whose label has the same `compact_key`. `term_suggestions` refers to words and concepts by slug in the same way.
 
-## Reading the diagram
+### Reading the diagram
 
 | Symbol | Meaning |
 |---|---|
@@ -161,7 +171,7 @@ Skills and traits connect to concepts by spelling, not by a foreign key: a word 
 | PK / FK / UK | primary key / foreign key / unique key |
 | `text_array` | Postgres `TEXT[]` |
 
-## Normal form, table by table
+### Normal form, table by table
 
 | Table | Key | Form | Why |
 |---|---|---|---|
@@ -176,7 +186,7 @@ Skills and traits connect to concepts by spelling, not by a foreign key: a word 
 | `term_suggestions` | `(concept_type, term)` | Stored output | The model stage's conclusions, plus a person's decision; `suggestions` is a ranked list kept as one value |
 | `ingestion_events` | `event_id` | Log, outside the model | The raw JSON payload is kept exactly as received; nothing reads it for matching |
 
-## Rules that live in the database
+### Rules that live in the database
 
 - **Availability is consistent:** `open_to_opportunities = false` requires `available_from IS NULL`, and `true` requires a date.
 - **Slugs and labels are well-formed:** lowercase words joined by single hyphens, enforced by `CHECK`.

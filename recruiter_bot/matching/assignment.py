@@ -1,28 +1,14 @@
-"""Maximum-weight one-to-one assignment, by the Hungarian algorithm (D-52).
-
-The problem: rows are the skills a job requires, columns are the skills a candidate has, and
-weights[row][column] says how much credit that candidate skill earns for that requirement
-(0 for none). Each candidate skill may cover at most one requirement, and each requirement
-takes at most one candidate skill. Which pairing earns the most credit in total?
-
-Trying every combination takes exponentially longer as the lists grow: 5 seconds at 8
-requirements, 109 seconds at 10. The Hungarian algorithm finds the same best answer in time
-proportional to rows x rows x columns, a few milliseconds for 20 requirements.
-"""
+"""Maximum-weight one-to-one assignment, by the Hungarian algorithm."""
 
 
 def best_assignment(weights: list[list[int]]) -> list[int | None]:
-    """For each row, the column it is paired with, or None if it earns nothing.
-
-    Weights are whole numbers, so ties are exact. Rows with no positive weight stay unpaired.
-    """
+    """For each row, its paired column, or None if it earns nothing."""
     rows = len(weights)
     if rows == 0:
         return []
     real_columns = len(weights[0])
 
-    # One spare column per row, with weight 0: a row paired with a spare column is simply unpaired.
-    # This keeps the problem "every row gets a column" even when there are fewer useful columns than rows.
+    # A zero-weight spare column per row, so a row can stay unpaired.
     columns = real_columns + rows
 
     # The algorithm below finds the cheapest pairing, so negate the weights to find the richest.
@@ -41,13 +27,7 @@ def best_assignment(weights: list[list[int]]) -> list[int | None]:
 
 
 def _cheapest_pairing(cost: list[list[int]], rows: int, columns: int) -> list[int]:
-    """Gives every row its own column at the lowest total cost. Needs columns >= rows.
-
-    The Hungarian algorithm in its shortest-augmenting-path form. Each row is added in turn;
-    "potentials" (row_bonus, column_bonus) adjust the costs so that the cheapest unpaired
-    column can always be found, and the pairing is improved along the cheapest path.
-    Indices here start at 1; index 0 is a helper slot.
-    """
+    """Gives every row its own column at the lowest total cost (shortest augmenting path)."""
     infinity = float("inf")
     row_bonus = [0] * (rows + 1)
     column_bonus = [0] * (columns + 1)

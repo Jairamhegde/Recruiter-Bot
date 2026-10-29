@@ -15,14 +15,14 @@ EMAIL_PATTERN = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"  # a light check; a real system co
 class CandidateInput(BaseModel):
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 
-    name: str = Field(min_length=1)  # not unique: people share names (D-53)
-    email: str | None = Field(default=None, pattern=EMAIL_PATTERN)  # optional; unique when present (D-53)
+    name: str = Field(min_length=1)  # not unique: people share names
+    email: str | None = Field(default=None, pattern=EMAIL_PATTERN)  # optional; unique when present
     skills: list[str] = Field(min_length=1)
     experience_years: int = Field(ge=0, le=70, strict=True)
     availability: str = Field(min_length=1)
     traits: list[str] = []
     quirk: str | None = None
-    # Roles the candidate wants, e.g. "Backend Engineer". Stored, not yet used in matching (D-47).
+    # Roles the candidate wants, e.g. "Backend Engineer". Stored, not yet used in matching.
     job_preferences: list[str] = []
 
 

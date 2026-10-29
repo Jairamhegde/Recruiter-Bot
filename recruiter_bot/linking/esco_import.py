@@ -1,15 +1,4 @@
-"""Adds real ESCO labels to seed/taxonomy.json, from the ESCO records kept in seed/esco_snapshot.json (D-55).
-
-Usage: python -m recruiter_bot.linking.esco_import
-
-The snapshot holds only the ESCO concepts this prototype maps to, with each label that was left
-out and why. This script is deterministic and safe to run again: it adds what is missing and
-changes nothing else. A label is added as a synonym of our concept unless:
-- it was excluded when the mapping was reviewed (for example "show positive attitude" is optimism, not enthusiasm);
-- it is already one of the concept's labels;
-- it would also belong to another concept of the same type: one label can mean only one thing,
-  so a label two concepts claim is left out of both and reported.
-"""
+"""Adds reviewed ESCO labels to seed/taxonomy.json. Usage: python -m recruiter_bot.linking.esco_import"""
 import json
 import sys
 from collections import defaultdict
@@ -33,7 +22,7 @@ def import_esco_labels(taxonomy: dict, snapshot: dict) -> tuple[dict, list[str]]
         for label in _labels_of(concept):
             owners[(concept["type"], compact_key(label))].add(concept["id"])
 
-    # The labels ESCO proposes for each concept, normalized like every other term (D-02).
+    # The labels ESCO proposes for each concept, normalized like every other term.
     proposed = {}
     for concept_id, record in snapshot["concepts"].items():
         concept = concept_by_id[concept_id]

@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 from recruiter_bot.ingest.taxonomy.taxonomy_reader import ConceptLabel
 
-# Review hints only: they never give credit (D-31).
+# Review hints only: they never give credit.
 NEGATION_WORDS = {"not", "non", "no", "un", "anti", "never", "without"}
 
 

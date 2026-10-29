@@ -1,11 +1,4 @@
-"""Measures the linking stages against the labelled evaluation cases (D-42).
-
-Usage:
-    python -m recruiter_bot.linking.evaluate search   (stage 4)
-    python -m recruiter_bot.linking.evaluate verify   (stage 5)
-    python -m recruiter_bot.linking.evaluate calibrate   (stage 6: choose thresholds)
-    python -m recruiter_bot.linking.evaluate test        (stage 6: judge them once)
-"""
+"""Measures the linking stages on the labelled cases. Usage: python -m recruiter_bot.linking.evaluate search|verify|calibrate|test"""
 import sys
 import time
 from dataclasses import dataclass
@@ -48,7 +41,7 @@ def score_search(index: ConceptIndex, cases: list[EvaluationCase]) -> tuple[Sear
 
 
 def evaluate_search() -> None:
-    """Compares the ways of representing a concept, on the calibration cases only (D-43)."""
+    """Compares the ways of representing a concept, on the calibration cases only."""
     models = load_models()
     if models is None:
         raise SystemExit("Model files are missing: run python -m recruiter_bot.linking.model_files")
@@ -80,8 +73,7 @@ class LabelledVerification:
 
 
 def area_under_curve(positive_scores: list[float], negative_scores: list[float]) -> float:
-    """The chance that a random positive scores higher than a random negative (ties count half).
-    1.0 separates them perfectly; 0.5 is a coin flip."""
+    """The chance a random positive outscores a random negative: 1.0 is perfect, 0.5 a coin flip."""
     wins = 0.0
     for positive in positive_scores:
         for negative in negative_scores:
@@ -111,7 +103,7 @@ def verify_calibration_cases() -> list[LabelledVerification]:
 
     labelled = []
     for case in load_cases(taxonomy=taxonomy):
-        # Negated words are decided by the rules (D-41) and never reach this stage.
+        # Negated words are decided by the rules and never reach this stage.
         if case.split != "calibration" or case.expect == "negated":
             continue
         candidates = index.closest(case.concept_type, case.term)
@@ -127,7 +119,7 @@ def verify_calibration_cases() -> list[LabelledVerification]:
 
 
 def evaluate_verification() -> None:
-    """How well each signal separates synonyms from everything else, on the calibration cases (D-44)."""
+    """How well each signal separates synonyms from everything else, on the calibration cases."""
     started = time.perf_counter()
     labelled = verify_calibration_cases()
     print(f"{len(labelled)} candidate pairs verified in {time.perf_counter() - started:.1f} s\n")
@@ -193,7 +185,7 @@ class DecisionScore:
 
 
 def verify_cases(split: str) -> list[tuple[EvaluationCase, list[Verification]]]:
-    """The verified candidates of every case in one split. Negated words never reach the models (D-41)."""
+    """The verified candidates of every case in one split. Negated words never reach the models."""
     models = load_models()
     if models is None:
         raise SystemExit("Model files are missing: run python -m recruiter_bot.linking.model_files")
@@ -213,7 +205,7 @@ def score_decisions(results: list[tuple[EvaluationCase, list[Verification]]], th
     auto_correct, auto_wrong = [], []
     review = review_with_right_concept = review_needing_concept = no_match = 0
     for case, verifications in results:
-        # The automatic rule is measured even while it is switched off in production (D-45).
+        # The automatic rule is measured even while it is switched off in production.
         decision = decide(verifications, thresholds, automatic_linking=True)
         if decision.outcome == "auto_link":
             if case.expect == "same" and decision.concept == case.concept:
@@ -240,8 +232,7 @@ GRID_MARGIN = [0.0, 0.02, 0.05, 0.10, 0.20, 0.30, 0.50]
 
 
 def calibrate() -> None:
-    """Chooses the thresholds on the calibration cases (D-45): no wrong automatic links, then as many right ones
-    as possible. On a tie, the stricter setting wins."""
+    """Chooses thresholds with no wrong automatic links, then the most right ones."""
     results = verify_cases("calibration")
     same_words = sum(1 for case, _ in results if case.expect == "same")
 
@@ -276,7 +267,7 @@ def _better(score: DecisionScore, thresholds: Thresholds, best_score: DecisionSc
 
 
 def test() -> None:
-    """Judges the chosen THRESHOLDS once on the test cases, which no choice was based on (D-45)."""
+    """Judges the chosen THRESHOLDS once on the test cases, which no choice was based on."""
     results = verify_cases("test")
     same_words = sum(1 for case, _ in results if case.expect == "same")
     score = score_decisions(results, THRESHOLDS)

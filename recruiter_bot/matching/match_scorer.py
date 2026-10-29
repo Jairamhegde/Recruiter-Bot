@@ -5,27 +5,21 @@ from recruiter_bot.matching.profile_reader import CandidateProfile, JobProfile
 from recruiter_bot.matching.term_credit import TermCredit
 from recruiter_bot.matching.term_matcher import TermComparison, TermMatch, compare_terms
 
-# D-32: experience and culture keep their D-11 weights; skills hold availability's share until it's scored.
+# Experience and culture keep their original weights; skills hold availability's share until it's scored.
 SKILL_WEIGHT = 0.7
 EXPERIENCE_WEIGHT = 0.2
 CULTURE_WEIGHT = 0.1
 
-# D-34: tiers for a qualifying match. 50 itself counts as a match (D-17).
+# Tiers for a qualifying match. 50 itself counts as a match.
 STRONG_MATCH_SCORE = 70.0
 MATCH_SCORE = 50.0
 
-# D-37: bump whenever the formula, weights or credit rules change, so stored scores are recomputed.
-# 3: matches also store their matched and missing culture keywords, for the evidence (D-50).
-# 4: words the model linked earn capped "suggested" credit (D-54).
-# 5: a job's minimum experience can be required (no match below it) or preferred (at most possible_match) (D-56).
-# 6: required is the default for every job (D-56, revised).
+# Bump when the formula, weights or credit rules change, so stored scores are recomputed.
 ALGORITHM_VERSION = "6"
 
 
 def tier_for(score: float, meets_minimum_experience: bool = True) -> str:
-    """How strong a qualifying match is (D-34). Worked out at read time, never stored.
-    Below the job's minimum experience, a match is at most possible, whatever its score (D-56):
-    "strong" would claim a fit the job's own requirement says is missing."""
+    """The tier of a qualifying match; below the minimum experience, at most possible."""
     if score >= STRONG_MATCH_SCORE and meets_minimum_experience:
         return "strong_match"
     if score >= MATCH_SCORE:
@@ -50,26 +44,24 @@ class MatchResult:
     matched_culture: list[str]
     missing_culture: list[str]
     reason: str
-    meets_minimum_experience: bool = True   # the candidate has at least the job's minimum years (D-56)
-    experience_required: bool = False       # the job made the minimum a hard requirement (D-56)
+    meets_minimum_experience: bool = True   # the candidate has at least the job's minimum years
+    experience_required: bool = False       # the job made the minimum a hard requirement
 
     @property
     def qualifies(self) -> bool:
-        """No skill credit means no match (D-12): experience and culture can't create one.
-        Neither can a model suggestion on its own (D-54): at least one skill must match through
-        the taxonomy itself, so a guess can only add to a real match, never make one."""
+        """At least one skill must match through the taxonomy itself."""
         if self.experience_required and not self.meets_minimum_experience:
-            return False  # D-56: the job owner made the minimum a hard requirement
+            return False  # The job owner made the minimum a hard requirement
         return any(match.credit.kind != "suggested" for match in self.skill_matches)
 
     @property
     def tier(self) -> str:
-        """How strong a qualifying match is (D-34). Only meaningful when qualifies is true."""
+        """How strong a qualifying match is. Only meaningful when qualifies is true."""
         return tier_for(self.score, self.meets_minimum_experience)
 
 
 def score_match(candidate: CandidateProfile, job: JobProfile, credit: TermCredit) -> MatchResult:
-    """The fit between one candidate and one job. Pure and direction-free (D-32)."""
+    """The fit between one candidate and one job. Pure and direction-free."""
     skills = compare_terms(candidate.skills, job.required_skills, "skill", credit)
     experience_score = experience_fit(candidate.experience_years, job.min_experience_years)
 

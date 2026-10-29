@@ -21,7 +21,7 @@ class CandidateNotFound(LookupError):
 
 
 class CandidatePatch(BaseModel):
-    """Every field optional; the constraints match CandidateInput (D-38)."""
+    """Every field optional; the constraints match CandidateInput."""
     # Unknown fields are refused, so a typo like "skils" fails instead of silently doing nothing.
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -32,7 +32,7 @@ class CandidatePatch(BaseModel):
     availability: str | None = Field(default=None, min_length=1)
     traits: list[str] | None = None
     quirk: str | None = None  # null clears it
-    job_preferences: list[str] | None = None  # null clears them; stored, not yet used in matching (D-47)
+    job_preferences: list[str] | None = None  # null clears them; stored, not yet used in matching
 
     @model_validator(mode="after")
     def required_fields_cannot_be_cleared(self) -> "CandidatePatch":
@@ -84,12 +84,12 @@ REPLACE_TRAITS_INSERT_SQL = """
 
 
 def update_candidate(conn: psycopg.Connection, candidate_id: int, patch: CandidatePatch, source: str = "api") -> None:
-    """Applies the sent fields and refreshes the candidate's matches, all in one transaction (D-38)."""
+    """Applies the sent fields and refreshes the candidate's matches, all in one transaction."""
     sent = patch.model_dump(include=patch.model_fields_set)
     today = conn.execute("SELECT current_date").fetchone()[0]
     conn.commit()
 
-    # Normalize before writing anything, with the same rules as ingestion (D-02).
+    # Normalize before writing anything, with the same rules as ingestion.
     try:
         slug = normalize_required(patch.name, "name") if "name" in sent else None
         skill_slugs = normalize_list(patch.skills, "skill") if "skills" in sent else None
@@ -97,7 +97,7 @@ def update_candidate(conn: psycopg.Connection, candidate_id: int, patch: Candida
         preference_slugs = (
             normalize_list(patch.job_preferences or [], "job preference") if "job_preferences" in sent else None
         )
-        # A changed availability counts from today, the day the person said it (D-39).
+        # A changed availability counts from today, the day the person said it.
         availability = parse_availability(patch.availability, today) if "availability" in sent else None
     except ValueError as error:
         log_rejected(conn, "candidate", source, [RecordError(0, _payload(candidate_id, sent), str(error))])
@@ -110,7 +110,7 @@ def update_candidate(conn: psycopg.Connection, candidate_id: int, patch: Candida
             raise CandidateNotFound(f"No candidate with id {candidate_id}")
         current_slug, full_name, email, experience_years, open_to_opportunities, available_from, quirk = current
 
-        # Names may repeat (D-53); only an email can clash.
+        # Names may repeat; only an email can clash.
         if "email" in sent:
             email = patch.email.lower() if patch.email else None
             if email is not None and conn.execute(OTHER_CANDIDATE_WITH_EMAIL_SQL, (email, candidate_id)).fetchone()[0]:
@@ -141,8 +141,7 @@ def update_candidate(conn: psycopg.Connection, candidate_id: int, patch: Candida
             conn.execute(REPLACE_JOB_PREFERENCES_INSERT_SQL, (candidate_id, preference_slugs))
 
         log_accepted(conn, "candidate", source, [slug or current_slug], [_payload(candidate_id, sent)])
-        # Same transaction, so nobody sees the new profile with old matches (D-37).
-        # Unknown words are linked first, so this record's matches already use the links (D-41).
+        # Same transaction, so the new profile never appears with old matches.
         link_record_terms(conn, skill_slugs, trait_slugs)
         refresh_candidate_matches(conn, candidate_id)
 

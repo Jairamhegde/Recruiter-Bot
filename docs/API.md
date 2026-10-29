@@ -55,7 +55,7 @@ Each entry has:
 | `score` | 0 to 100 |
 | `reason` | A short sentence, e.g. `2/3 skills (public-speaking, sales) · missing negotiation · 11y vs 3y min · culture 1/2 (enthusiastic)` |
 | `evidence` | What matched and what is missing: `skills` and `culture` have `matched` and `missing` lists; `experience` has one `detail` sentence. `culture` is `null` when the job has no culture keywords. |
-| `meets_minimum_experience` | `false` when the candidate has fewer years than the job's minimum. Such a match is at most `possible_match`, or isn't listed at all when the job's minimum is `required` (D-56). |
+| `meets_minimum_experience` | `false` when the candidate has fewer years than the job's minimum. Such a match is at most `possible_match`, or isn't listed at all when the job's minimum is `required`. |
 | `score_breakdown` | **Only with `?explain=true`.** For each factor: `score`, `weight`, `points`, `detail`, `matched`, `missing`. The points add up to the score. |
 
 ### Errors
@@ -140,7 +140,7 @@ Adds a job. The response is the same as `GET /jobs/{job_id}/matches` for the new
 | `company` | no | text | The company posting the job; with the title, it identifies the job |
 | `required_skills` | yes | list of text | At least one |
 | `min_experience_years` | yes | whole number | 0 to 70 |
-| `experience_requirement` | no | `"required"` (default) or `"preferred"` | `required`: below the minimum, no match. `preferred`: below it, the score drops and the match is at most `possible_match` (D-56). |
+| `experience_requirement` | no | `"required"` (default) or `"preferred"` | `required`: below the minimum, no match. `preferred`: below it, the score drops and the match is at most `possible_match`. |
 | `culture_keywords` | no | list of text | |
 | `tagline` | no | text | Shown to candidates, never scored |
 
@@ -264,7 +264,7 @@ curl -X PATCH http://127.0.0.1:8000/candidates/7 -H "Content-Type: application/j
 ## Taxonomy
 
 ### GET /taxonomy/suggestions
-What the optional model stage concluded about words the rules couldn't place (D-54).
+What the optional model stage concluded about words the rules couldn't place.
 
 | Field | Meaning |
 |---|---|
@@ -294,7 +294,7 @@ curl http://127.0.0.1:8000/taxonomy/suggestions
 ```
 
 ### POST /taxonomy/suggestions/{type}/{term}/approve
-A person confirms what an unknown word means (D-55). `type` is `skill` or `trait`.
+A person confirms what an unknown word means. `type` is `skill` or `trait`.
 - **From that moment,** the word earns full synonym credit for every record that uses it, and for every later one. Affected matches are refreshed straight away.
 - **The approval survives reseeds.**
 

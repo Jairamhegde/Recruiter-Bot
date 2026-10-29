@@ -1,13 +1,4 @@
-"""Stage 5: check each candidate concept with the NLI model, in both directions (D-44).
-
-The unknown word and each label of a candidate concept are put into a sentence, then the NLI
-model is asked two questions:
-- forward:  does "This person is level headed." imply "This person is calm."?
-- backward: does "This person is calm." imply "This person is level headed."?
-Both directions holding means the two say the same thing (a synonym). Only one direction means
-one is broader than the other (related). A contradiction means opposites, which similarity alone
-can't tell apart from synonyms: 'anxious' is very similar to 'calm'.
-"""
+"""Stage 5: check each candidate concept with the NLI model, in both directions."""
 from dataclasses import dataclass
 
 from recruiter_bot.ingest.taxonomy.taxonomy_reader import Taxonomy

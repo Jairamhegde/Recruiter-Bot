@@ -20,14 +20,14 @@ class JobNotFound(LookupError):
 
 
 class JobPatch(BaseModel):
-    """Every field optional; the constraints match JobInput (D-38)."""
+    """Every field optional; the constraints match JobInput."""
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     title: str | None = Field(default=None, min_length=1)
     company: str | None = Field(default=None, min_length=1)  # null clears it
     required_skills: list[str] | None = Field(default=None, min_length=1)
     min_experience_years: int | None = Field(default=None, ge=0, le=70, strict=True)
-    experience_requirement: Literal["required", "preferred"] | None = None  # D-56
+    experience_requirement: Literal["required", "preferred"] | None = None
     culture_keywords: list[str] | None = None
     tagline: str | None = None  # null clears it
 
@@ -74,10 +74,10 @@ REPLACE_CULTURE_INSERT_SQL = """
 
 
 def update_job(conn: psycopg.Connection, job_id: int, patch: JobPatch, source: str = "api") -> None:
-    """Applies the sent fields and refreshes the job's matches, all in one transaction (D-38)."""
+    """Applies the sent fields and refreshes the job's matches, all in one transaction."""
     sent = patch.model_dump(include=patch.model_fields_set)
 
-    # Normalize before writing anything, with the same rules as ingestion (D-02).
+    # Normalize before writing anything, with the same rules as ingestion.
     try:
         slug = normalize_required(patch.title, "title") if "title" in sent else None
         skill_slugs = normalize_list(patch.required_skills, "skill") if "required_skills" in sent else None
@@ -97,7 +97,7 @@ def update_job(conn: psycopg.Connection, job_id: int, patch: JobPatch, source: s
         new_slug = slug or current_slug
         new_title = patch.title if "title" in sent else title
 
-        # Titles may repeat across companies; within one company they can't (D-53).
+        # Titles may repeat across companies; within one company they can't.
         if company is not None and conn.execute(OTHER_JOB_AT_COMPANY_SQL, (company, new_slug, job_id)).fetchone()[0]:
             raise JobExists(f"{company!r} already has a job titled {new_title!r}")
 
@@ -120,8 +120,7 @@ def update_job(conn: psycopg.Connection, job_id: int, patch: JobPatch, source: s
             conn.execute(REPLACE_CULTURE_INSERT_SQL, (job_id, [trait_ids[t] for t in culture_slugs]))
 
         log_accepted(conn, "job", source, [slug or current_slug], [_payload(job_id, sent)])
-        # Same transaction, so nobody sees the new job with old matches (D-37).
-        # Unknown words are linked first, so this record's matches already use the links (D-41).
+        # Same transaction, so the new job never appears with old matches.
         link_record_terms(conn, skill_slugs, culture_slugs)
         refresh_job_matches(conn, job_id)
 

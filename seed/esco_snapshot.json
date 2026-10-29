@@ -3,7 +3,7 @@
  "licence": "CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/); (c) European Union",
  "api": "https://ec.europa.eu/esco/api (search, resource/skill), language en",
  "retrieved_on": "2026-10-30",
- "note": "Only the ESCO records this prototype maps to; not the full ESCO dataset (D-55).",
+ "note": "Only the ESCO records this prototype maps to; not the full ESCO dataset.",
  "concepts": {
   "chemistry": {
    "esco_uri": "http://data.europa.eu/esco/skill/cde9911c-f92e-4de1-811f-336e177ac4ce",

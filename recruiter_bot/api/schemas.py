@@ -10,12 +10,12 @@ from recruiter_bot.matching.recruiter_view import open_candidates, proactive_off
 
 class CandidateSummary(BaseModel):
     candidate_id: int
-    name: str             # names may repeat (D-53); candidate_id and email tell people apart
+    name: str             # names may repeat; candidate_id and email tell people apart
     email: str | None
     experience_years: int
     skills: list[str]
     traits: list[str]
-    job_preferences: list[str]  # stored, not yet used in matching (D-47)
+    job_preferences: list[str]  # stored, not yet used in matching
 
     @classmethod
     def from_profile(cls, profile: CandidateProfile) -> "CandidateSummary":
@@ -33,9 +33,9 @@ class CandidateSummary(BaseModel):
 class JobSummary(BaseModel):
     job_id: int
     title: str
-    company: str | None   # a title is unique within a company (D-53)
+    company: str | None   # a title is unique within a company
     min_experience_years: int
-    experience_requirement: str  # "required" or "preferred" (D-56)
+    experience_requirement: str  # "required" or "preferred"
     required_skills: list[str]
     culture_keywords: list[str]
 
@@ -64,7 +64,7 @@ class ExperienceEvidence(BaseModel):
 
 
 class MatchEvidenceOut(BaseModel):
-    """The default evidence (D-50): only what matched and what didn't. The score is shown separately."""
+    """The default evidence: only what matched and what didn't. The score is shown separately."""
     skills: TermEvidence
     experience: ExperienceEvidence
     culture: TermEvidence | None  # None when the job lists no culture keywords
@@ -90,7 +90,7 @@ class FactorBreakdown(BaseModel):
 
 
 class ScoreBreakdown(BaseModel):
-    """Only with ?explain=true: how the score is built. The points add up to the score (D-50)."""
+    """Only with ?explain=true: how the score is built. The points add up to the score."""
     skills: FactorBreakdown
     experience: FactorBreakdown
     culture: FactorBreakdown | None  # None when the job lists no culture keywords
@@ -130,10 +130,9 @@ class JobMatch(OmitsEmptyBreakdown):
     reason: str
     evidence: MatchEvidenceOut
     score_breakdown: ScoreBreakdown | None = None  # only with ?explain=true
-    meets_minimum_experience: bool  # false: the candidate is below the job's minimum years (D-56)
-    tagline: str | None   # shown to the candidate, never scored (D-06)
-    # D-51: shown to the candidate as a yes or no, never a count or percentage, which in a small pool
-    # would reveal other candidates' scores.
+    meets_minimum_experience: bool  # false: the candidate is below the job's minimum years
+    tagline: str | None   # shown to the candidate, never scored
+    # A yes or no only, so other candidates' scores stay private.
     top_applicant: bool       # no open rival with a strong or possible match scores higher; orders tied jobs
     matches_preference: bool  # the job's title is one of the candidate's job_preferences
 
@@ -165,8 +164,8 @@ class CandidateMatch(OmitsEmptyBreakdown):
     reason: str
     evidence: MatchEvidenceOut
     score_breakdown: ScoreBreakdown | None = None  # only with ?explain=true
-    meets_minimum_experience: bool  # false: the candidate is below the job's minimum years (D-56)
-    quirk: str | None     # shown to the recruiter, never scored (D-06)
+    meets_minimum_experience: bool  # false: the candidate is below the job's minimum years
+    quirk: str | None     # shown to the recruiter, never scored
 
     @classmethod
     def from_result(cls, result: StoredMatch, rank: int, explain: bool) -> "CandidateMatch":
@@ -184,9 +183,7 @@ class CandidateMatch(OmitsEmptyBreakdown):
 
 
 class JobMatchesByTier(BaseModel):
-    """The three tiers of D-34, each best first. A tier with no matches is an empty list.
-    Near misses appear only when there is no strong or possible match (D-17, D-49).
-    The rank runs across the tiers: 1, 2, 3 ... from the best match down."""
+    """The three tiers, best first; near misses only when nothing better exists."""
     strong_match: list[JobMatch] = Field(default_factory=list)
     possible_match: list[JobMatch] = Field(default_factory=list)
     near_miss: list[JobMatch] = Field(default_factory=list)
@@ -196,7 +193,7 @@ class JobMatchesByTier(BaseModel):
     def from_results(
         cls, results: list[StoredMatch], standings: dict[int, Standing], preferences: set[str], explain: bool,
     ) -> "JobMatchesByTier":
-        """Results must already be in the candidate's order (D-51), so the rank is simply the position."""
+        """Results must already be in the candidate's order, so the rank is simply the position."""
         shown, near_misses_included = shown_matches(results)
         groups = cls(near_misses_included=near_misses_included)
         for rank, result in enumerate(shown, start=1):
@@ -206,9 +203,7 @@ class JobMatchesByTier(BaseModel):
 
 
 class CandidateMatchesByTier(BaseModel):
-    """The three tiers of D-34, each best first. A tier with no matches is an empty list.
-    Near misses appear only when there is no strong or possible match (D-17, D-49).
-    The rank runs across the tiers: 1, 2, 3 ... from the best match down."""
+    """The three tiers, best first; near misses only when nothing better exists."""
     strong_match: list[CandidateMatch] = Field(default_factory=list)
     possible_match: list[CandidateMatch] = Field(default_factory=list)
     near_miss: list[CandidateMatch] = Field(default_factory=list)
@@ -224,7 +219,7 @@ class CandidateMatchesByTier(BaseModel):
 
 
 class ProactiveOffer(CandidateMatch):
-    """A candidate who isn't looking, but beats everyone who is (D-49). Ranked within the offers."""
+    """A candidate who isn't looking, but beats everyone who is. Ranked within the offers."""
     tier: str
     recommended_action: Literal["proactive-offer"] = "proactive-offer"
 
@@ -235,7 +230,7 @@ class ProactiveOffer(CandidateMatch):
 
 
 class CandidateMatches(BaseModel):
-    """The candidate's view: jobs ordered by score, top applicant, posting date (D-51)."""
+    """The candidate's view: jobs ordered by score, top applicant, posting date."""
     candidate_id: int
     matches: JobMatchesByTier
 
@@ -250,11 +245,7 @@ class CandidateMatches(BaseModel):
 
 
 class JobMatches(BaseModel):
-    """The recruiter's view of one job (D-49):
-    - matches: candidates open to opportunities, who can be hired now;
-    - proactive_offers: candidates not looking who score higher than the best open candidate;
-    - proactive_offers_included: always present, so an empty list is never ambiguous. True means there is
-      someone worth a proactive offer; False means nobody not-looking beats the best open candidate."""
+    """The recruiter's view of one job: open candidates, plus proactive offers."""
     job_id: int
     matches: CandidateMatchesByTier
     proactive_offers_included: bool

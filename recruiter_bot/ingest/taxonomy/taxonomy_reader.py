@@ -6,7 +6,7 @@ from typing import Any
 from recruiter_bot.ingest.text_normalizer import compact_key, normalize_required
 
 CONCEPT_TYPES = ("skill", "trait")
-# Credit comes from the relation type, never from the entry (D-30).
+# Credit comes from the relation type, never from the entry.
 RELATION_CREDIT = {"related": 0.5, "unrelated": 0.0}
 CONCEPT_KEYS = {"id", "type", "preferred_label", "alt_labels", "hidden_labels", "description", "references"}
 REFERENCE_KEYS = {"esco_uri", "onet_element_id"}
@@ -51,7 +51,7 @@ def read_taxonomy(path: Path) -> Taxonomy:
 
 
 def extract_taxonomy(data: Any) -> Taxonomy:
-    """Validates the taxonomy file. Any bad entry fails the whole load (D-30)."""
+    """Validates the taxonomy file. Any bad entry fails the whole load."""
     if not isinstance(data, dict) or set(data) != {"concepts", "relations"}:
         raise ValueError("taxonomy: expected an object with keys ['concepts', 'relations']")
     concepts, labels = _extract_concepts(data["concepts"])
@@ -98,7 +98,7 @@ def _extract_concepts(entries: Any) -> tuple[list[Concept], list[ConceptLabel]]:
                 raise ValueError(f"{where}.{field}: expected a list of strings")
             for raw_label in raw_labels:
                 label = normalize_required(_string(raw_label, f"{where}.{field}"), f"{where}.{field}")
-                # Compact keys, because that's how labels are matched (D-26).
+                # Compact keys, because that's how labels are matched.
                 owner_key = (concept_type, compact_key(label))
                 if owner_key in label_owner_by_key:
                     raise ValueError(f"{where}: {concept_type} label {label!r} already belongs to "
