@@ -1,5 +1,9 @@
+from datetime import datetime
+
 from recruiter_bot.api.candidates import matches_for
 from recruiter_bot.api.schemas import JobMatches
+from recruiter_bot.matching.candidate_view import Standing, order_for_candidate
+from recruiter_bot.matching.match_store import StoredMatch
 from recruiter_bot.matching import (
     CandidateProfile,
     Credit,
@@ -116,6 +120,33 @@ def test_a_score_of_exactly_50_counts_as_a_match_and_70_as_a_strong_one():
     assert tier_for(69.9) == "possible_match"
     assert tier_for(50.0) == "possible_match"
     assert tier_for(49.9) == "near_miss"
+
+
+def a_stored_match(job_id: int, score: float) -> StoredMatch:
+    """Candidate 1's stored match for this job; only the ids and the score matter for ordering."""
+    return StoredMatch(
+        job_id=job_id, job_title=f"job {job_id}", job_company=None, candidate_id=1, candidate_name="Pat",
+        score=score, skill_score=1.0, experience_score=1.0, culture_score=None,
+        matched_skills=[], missing_skills=[], matched_culture=[], missing_culture=[], reason="",
+        candidate_experience_years=5, job_min_experience_years=2,
+        candidate_quirk=None, job_tagline=None, candidate_is_open=True,
+    )
+
+
+def test_a_candidates_tied_jobs_put_the_one_they_lead_first_then_the_newest():
+    """Score first; on a tie, the job where they're top applicant; then the newer posting."""
+    older, newer = datetime(2026, 1, 1), datetime(2026, 2, 1)
+    standings = {
+        1: Standing(above=1, job_slug="job-1", posted_at=newer),  # same score, but a rival scores higher
+        2: Standing(above=0, job_slug="job-2", posted_at=older),  # same score, top applicant
+        3: Standing(above=0, job_slug="job-3", posted_at=newer),  # same score, top applicant, newer
+        4: Standing(above=0, job_slug="job-4", posted_at=newer),  # better score, so first whatever else
+    }
+    matches = [a_stored_match(1, 70.0), a_stored_match(2, 70.0), a_stored_match(3, 70.0), a_stored_match(4, 80.0)]
+
+    ordered = order_for_candidate(matches, standings)
+
+    assert [match.job_id for match in ordered] == [4, 3, 2, 1]
 
 
 def job_id_of(conn, title: str) -> int:

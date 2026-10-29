@@ -1,6 +1,10 @@
 # Entity-Relationship Diagram
 
-The schema in [`migrations/001_init.sql`](../migrations/001_init.sql). The diagram renders on GitHub.
+The schema in [`migrations/001_init.sql`](../migrations/001_init.sql).
+
+![Recruiter Bot database schema](er_diagram.png)
+
+The image is exported from [`er_diagram.drawio`](er_diagram.drawio), which you can edit at [app.diagrams.net](https://app.diagrams.net) or in the draw.io VS Code extension. The same schema is below as a Mermaid diagram, which GitHub renders directly.
 
 ```mermaid
 erDiagram
