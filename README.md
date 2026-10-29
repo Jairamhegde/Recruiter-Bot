@@ -22,7 +22,7 @@ curl http://127.0.0.1:8000/candidates/7/matches     # ranked jobs for a candidat
 curl "http://127.0.0.1:8000/jobs/6/matches?explain=true"   # plus the score arithmetic
 ```
 
-**See it work, with evidence:** [docs/DEMO.md](docs/DEMO.md) has one job and seven sample candidates, each showing one matching rule (synonyms, one skill per requirement, the experience gate, proactive offers, tie-breaks), how to run them, and what to look for in the results.
+**See it work, with evidence:** [docs/DEMO.md](docs/DEMO.md) has one job and eight sample candidates, each showing one matching rule (synonyms, one skill per requirement, the experience gate and its 1-year grace, proactive offers, tie-breaks), how to run them, and what to look for in the results.
 
 On Windows, type `curl.exe`. To reset the data, run `docker compose down -v`. If port 8000 is taken, run `API_PORT=8001 docker compose up --build`.
 
@@ -83,12 +83,14 @@ score = 100 × (0.7 × skills + 0.2 × experience + 0.1 × culture)
 ```
 
 - **skills** = credit earned ÷ skills the job lists. This is coverage, not all-or-nothing: 2 of 3 earns ⅔.
-- **experience** = 1 when years ≥ the minimum. Being over-qualified is never penalized.
+- **experience** = 1 when years ≥ the minimum, and years ÷ minimum below it (3 of 4 years earns 0.75). Extra years earn nothing extra, and being over-qualified is never penalized.
 - **culture** = credit earned ÷ culture keywords the job lists, matched against the candidate's traits.
 
-**Why 70 / 20 / 10:** skills and experience are the two factors the brief requires. Skills carry most of the weight because they're what the job actually needs done. Experience is mostly a gate (below), so its 20 points rarely separate people. Culture is a soft signal, worth only enough to separate otherwise equal candidates. Availability isn't in the score at all; it breaks ties instead.
+**Why 70 / 20 / 10:** skills and experience are the two factors the brief requires. Skills carry most of the weight because they're what the job actually needs done. Experience earns its 20 points in full at the minimum and in proportion just below it; it doesn't separate people above the minimum, by design, because extra years aren't extra fit. Culture is a soft signal, worth only enough to separate otherwise equal candidates. Availability isn't in the score at all; it breaks ties instead.
 
-**Two gates come before the score:** no skill overlap means no match, and less than the job's minimum experience means no match. A job can relax the second rule with `experience_requirement: "preferred"`. Below the minimum, the score then drops in proportion and the match can be at most "possible".
+**Two gates come before the score:**
+- **No skill overlap means no match.** Otherwise experience and culture alone could score 30.
+- **More than 1 year below the job's minimum experience means no match.** Up to 1 year short still counts, so a minimum isn't a cliff where 3 years is nothing and 4 is everything. That candidate's score drops in proportion, the match is at most "possible", and the reason says so: `3y vs 4y min (1y short)`. A job can relax the rule entirely with `experience_requirement: "preferred"`: then any shortfall is scored in proportion, still capped at "possible".
 
 **Worked example:** Sherlock for Backend Detective = 100 × (0.7 × 3/3 + 0.2 × 1 + 0.1 × 1/2) = **95.0**.
 
@@ -116,15 +118,17 @@ Every entry also has an `evidence` block listing matched and missing skills and 
 ### 4. Ordering and ties
 
 **Candidates for a job:**
-1. Total score.
-2. Earliest available date. A date in the past counts as today.
-3. A neutral hash of the job and candidate ids. The order is the same every time and favours no one; names are never used.
+1. Tier: strong before possible, so a candidate below the minimum experience never outranks a strong match.
+2. Total score.
+3. Earliest available date. A date in the past counts as today.
+4. A neutral hash of the job and candidate ids. The order is the same every time and favours no one; names are never used.
 
 **Jobs for a candidate:**
-1. Score.
-2. `top_applicant`: jobs where no competing open candidate scores higher come first, because that's where the candidate's chance is best. It's shown as a yes or no, never as a count, so other people's scores stay private.
-3. Most recent posting, since older ads are more likely to be filled already.
-4. The neutral hash.
+1. Tier: a job the candidate fully qualifies for ranks above one they're a year short for, even if that one scores higher.
+2. Score.
+3. `top_applicant`: jobs where no competing open candidate scores higher come first, because that's where the candidate's chance is best. It's shown as a yes or no, never as a count, so other people's scores stay private.
+4. Most recent posting, since older ads are more likely to be filled already.
+5. The neutral hash.
 
 **One score serves both directions:** a pair always has the same score in the recruiter's view and in the candidate's.
 
@@ -140,7 +144,7 @@ The key choices are below. **Every decision, with what it replaced and why, is i
 
 **"Not looking" doesn't mean "don't contact".** The brief says Michael Scott is applying for Sales Engineer, but his data says "Not looking". Hiding him would lose the best fit, and listing him as available would mislead. So he appears under `proactive_offers`.
 
-**Experience is a gate, not a tie-breaker.** A stated minimum is treated as a requirement. Before this rule, a candidate with every skill and 0 of 8 years was labelled a strong match. Above the minimum, more years earn nothing: 15 years isn't a better fit than 8 for a job asking for 3. Preferring more years would also track age, which is a discrimination risk.
+**Experience is a gate with a 1-year grace, not a tie-breaker.** A stated minimum is treated as a requirement: before the gate, a candidate with every skill and 0 of 8 years was labelled a strong match, because 20 points can't outweigh 70. But a hard cutoff is a cliff: 3 years for a 4-year job would vanish while 4 years earns full marks, and recruiters often consider someone a year short. So up to 1 year short is shown, scored in proportion, capped at "possible" and flagged; further below is no match. Above the minimum, more years earn nothing: 15 years isn't a better fit than 8 for a job asking for 3. Preferring more years would also track age, which is a discrimination risk.
 
 **Stored, not computed on read.** Matches are stored and refreshed in the same transaction as every write, so reads are one query and never stale. The cost is that a new job is scored against every candidate on write, which is fine at this size; at scale I'd only rescore candidates that share a skill with it.
 
@@ -154,8 +158,8 @@ The key choices are below. **Every decision, with what it replaced and why, is i
 
 ## Tests
 
-`tests/test_matching.py` has 26 tests:
-- **Scoring, ordering and input rules (10, no database needed):** the 70/20/10 formula; full marks for over-qualified candidates; proportional experience credit; no skill overlap means no match; half credit for related skills, named in the reason; one skill can't cover two requirements; the exact 50 and 70 tier boundaries; a candidate's tied jobs ordered by top applicant, then newest posting; PATCH refuses typos and cleared required fields; the Hungarian pairing always earns the brute-force maximum, on 500 random cases.
+`tests/test_matching.py` has 28 tests:
+- **Scoring, ordering and input rules (12, no database needed):** the 70/20/10 formula; full marks for over-qualified candidates; proportional experience credit; 1 year short of a required minimum is at most a possible match and flagged, more than 1 year short is no match; no skill overlap means no match; half credit for related skills, named in the reason; one skill can't cover two requirements; the exact 50 and 70 tier boundaries; a candidate's tied jobs ordered by top applicant, then newest posting; PATCH refuses typos and cleared required fields; the Hungarian pairing always earns the brute-force maximum, on 500 random cases.
 - **End to end (16, against a throwaway database built from the real migration and seed):** ranking in both directions; the same score both ways; stored matches equal a fresh calculation; ties go to whoever can start first; proactive offers appear only when deserved; near misses appear only when nothing better exists; taxonomy synonyms and related words; PATCH changes only what was sent and refreshes the matches; PATCH of a missing record changes nothing; a concept's own name matches its other words in both directions; an unknown word matches only its own spelling; every known seed word is linked to its concept; the database refuses a spelling that would mean two concepts; running the seed again adds nothing.
 
 ```bash

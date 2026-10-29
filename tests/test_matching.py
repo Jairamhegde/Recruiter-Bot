@@ -97,6 +97,25 @@ def test_too_little_experience_earns_proportional_credit():
     assert result.score == 90.0
 
 
+def test_one_year_short_of_a_required_minimum_is_at_most_a_possible_match():
+    """3 of 4 required years still qualifies, scored in proportion, capped at possible, and flagged."""
+    result = score_match(a_candidate(experience_years=3), a_job(min_experience_years=4), ExactCredit())
+
+    assert result.qualifies is True
+    assert result.score == 95.0
+    assert tier_for(result.score, result.meets_minimum_experience) == "possible_match"
+    assert "3y vs 4y min (1y short)" in result.reason
+
+
+def test_more_than_a_year_short_of_a_required_minimum_is_no_match():
+    """2 of 4 required years is no match, unless the job only prefers its minimum."""
+    candidate, job = a_candidate(experience_years=2), a_job(min_experience_years=4)
+
+    assert score_match(candidate, job, ExactCredit()).qualifies is False
+    assert score_match(candidate, a_job(min_experience_years=4, experience_requirement="preferred"),
+                       ExactCredit()).qualifies is True
+
+
 def test_no_skill_overlap_is_never_a_match():
     """Without a single skill in common it is never a match, whatever the experience or culture."""
     result = score_match(a_candidate(skills=["z"], experience_years=20), a_job(), ExactCredit())

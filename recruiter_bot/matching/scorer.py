@@ -16,6 +16,10 @@ CULTURE_WEIGHT = 0.1
 STRONG_MATCH_SCORE = 70.0
 MATCH_SCORE = 50.0
 
+# A required minimum still admits someone up to this many years short: scored in proportion,
+# at most a possible match, and flagged in the reason. Further below, no match.
+EXPERIENCE_GRACE_YEARS = 1
+
 
 class TermCredit(Protocol):
     """How much a candidate term earns toward a job term. The scorer only sees this."""
@@ -150,12 +154,13 @@ class MatchResult:
     missing_culture: list[str]
     reason: str
     meets_minimum_experience: bool
+    years_short: int  # how far below the job's minimum; 0 when it is met
     experience_required: bool  # the job made the minimum a hard requirement
 
     @property
     def qualifies(self) -> bool:
-        """Needs at least one skill in common, and the minimum years when the job requires them."""
-        if self.experience_required and not self.meets_minimum_experience:
+        """Needs at least one skill in common, and, when the job requires its minimum, at most 1 year short."""
+        if self.experience_required and self.years_short > EXPERIENCE_GRACE_YEARS:
             return False
         return len(self.skill_matches) > 0
 
@@ -188,6 +193,7 @@ def score_match(candidate: CandidateProfile, job: JobProfile, credit: TermCredit
         missing_culture=[] if culture is None else culture.missing_terms,
         reason=build_reason(candidate, job, skills, culture),
         meets_minimum_experience=candidate.experience_years >= job.min_experience_years,
+        years_short=max(0, job.min_experience_years - candidate.experience_years),
         experience_required=job.experience_requirement == "required",
     )
 
@@ -199,7 +205,11 @@ def build_reason(
     parts = [_coverage(skills, len(job.required_skills), "skills")]
     if skills.missing_terms:
         parts.append(f"missing {', '.join(skills.missing_terms)}")
-    parts.append(f"{candidate.experience_years}y vs {job.min_experience_years}y min")
+    experience = f"{candidate.experience_years}y vs {job.min_experience_years}y min"
+    years_short = job.min_experience_years - candidate.experience_years
+    if years_short > 0:
+        experience += f" ({years_short}y short)"
+    parts.append(experience)
     if culture is not None:
         parts.append(_coverage(culture, len(job.culture_keywords), "culture", noun_first=True))
     return " · ".join(parts)

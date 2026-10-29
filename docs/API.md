@@ -135,7 +135,7 @@ Adds a job. The response is the same as `GET /jobs/{job_id}/matches` for the new
 | `title` | yes | text | |
 | `required_skills` | yes | list of text | At least one |
 | `min_experience_years` | yes | whole number | 0 to 70 |
-| `experience_requirement` | no | `"required"` (default) or `"preferred"` | `required`: below the minimum, no match. `preferred`: below it, the score drops and the match is at most `possible_match`. |
+| `experience_requirement` | no | `"required"` (default) or `"preferred"` | `required`: up to 1 year below the minimum, the score drops and the match is at most `possible_match`; further below, no match. `preferred`: any amount below it, the score drops and the match is at most `possible_match`. |
 | `culture_keywords` | no | list of text | |
 | `tagline` | no | text | Shown to candidates, never scored |
 

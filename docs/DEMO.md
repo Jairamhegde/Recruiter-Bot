@@ -1,6 +1,6 @@
 # Demo: matching, with evidence
 
-One job and seven candidates. Each candidate shows one rule of the matching algorithm.
+One job and eight candidates. Each candidate shows one rule of the matching algorithm.
 
 ## Run it
 
@@ -23,6 +23,7 @@ One job and seven candidates. Each candidate shows one rule of the matching algo
    {"name":"Esha","skills":["Sales","Negotiation","Research"],"experience_years":12,"availability":"Not looking","traits":["Persistent","Calm under pressure"]}
    {"name":"Farah","skills":["Sales","Research"],"experience_years":5,"availability":"Immediate"}
    {"name":"Gopal","skills":["Sales","Research"],"experience_years":5,"availability":"1 month"}
+   {"name":"Hana","skills":["Sales","Negotiation","Research"],"experience_years":3,"availability":"Immediate","traits":["Persistent"]}
    ```
 
 ## Best candidates for the job: `GET /jobs/7/matches`
@@ -31,12 +32,14 @@ One job and seven candidates. Each candidate shows one rule of the matching algo
 |---|---|---|---|
 | Ben | 97.5 | strong | **Synonyms:** no exact words, yet first. `selling-products` = sales, `tenacious` = persistent, `resilience` ≈ calm-under-pressure (½). |
 | Asha | 95.0 | strong | Exact words, but only half the culture fit |
+| Hana | 90.0 | possible | **1-year grace:** every skill, but 3 of 4 required years. Scored in proportion, capped at possible, and the reason says `(1y short)` |
 | Farah | 66.7 | possible | **Tie-break:** same score as Gopal, but starts now |
 | Dwight S. | 66.7 | possible | A seed candidate, matched to a job added later |
 | Gopal | 66.7 | possible | Starts in a month, so after Farah |
 | Cara | 55.0 | possible | **One skill, one requirement:** `persuasion` relates to sales and negotiation, but counts once (1.5/3, not 2/3) |
+| Elle W. | 50.0 | possible | A seed candidate like Cara, but 1 year short: the same skills score 5 points less |
 | Esha | 100.0 | `proactive_offers` | **Not looking**, but better than everyone who is: worth approaching |
-| Dev | — | not listed | **Experience gate:** every skill, but 2 of 4 required years |
+| Dev | — | not listed | **Experience gate:** every skill, but 2 of 4 required years, more than the 1-year grace |
 
 Every `reason` names its links, e.g. `sales = selling-products`, `sales ≈ persuasion ½`.
 

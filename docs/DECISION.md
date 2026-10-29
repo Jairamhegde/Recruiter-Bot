@@ -22,14 +22,14 @@ One line per decision: what was chosen, and why. Where an earlier version did it
 - One pure scorer for both directions: **70 skills / 20 experience / 10 culture**. Skills and experience are the two factors the brief requires; culture separates otherwise equal candidates. Availability breaks ties instead of being scored.
 - A job's skills count as coverage, not all-or-nothing, because no candidate has all three Engineering Manager skills.
 - No skill overlap means no match; otherwise experience alone could score 20.
-- Below a required minimum of experience means no match. Above it, extra years earn nothing: 15 years isn't a better fit than 8 for a job asking for 3, and rewarding years would mostly reward age. A job can mark its minimum `preferred`, which scores proportionally instead of excluding.
+- More than 1 year below a required minimum of experience means no match. Up to 1 year short is scored in proportion, capped at a possible match, and flagged in the reason (`1y short`). An earlier version excluded anyone below the minimum, which made it a cliff (3 of 4 years scored nothing, 4 of 4 full marks) and left the 20% experience weight unable to change any match. No gate at all was worse: 20 points can't outweigh 70, so every skill and 0 of 8 years was a strong match. Above the minimum, extra years earn nothing: 15 years isn't a better fit than 8 for a job asking for 3, and rewarding years would mostly reward age. A job can mark its minimum `preferred`, which scores any shortfall proportionally instead of excluding.
 - Each candidate skill covers at most one requirement, so one `persuasion` can't count for both `sales` and `negotiation`. The best pairing is the assignment problem, solved by the Hungarian algorithm in O(n³). A first brute-force version took 109 s at 10 skills; Hungarian takes 0.23 ms at 50. A test checks it against brute force on 500 random cases.
 - The score is shared by both endpoints, so the recruiter's and the candidate's views can never disagree.
 - The reason is built from the score's own parts, so it can never contradict the score.
 - Tiers: strong ≥ 70, possible ≥ 50, near miss < 50, because a recruiter acts on a label, not a raw number. Near misses (at most 3) are shown only when nothing reaches 50.
 - Candidates who aren't looking are kept, as proactive offers when they beat every open candidate, because the brief's Michael Scott is "Not looking".
 - Ties break by earliest start, then a neutral hash of the ids. Names are never used: alphabetical order always favours the same people.
-- A candidate's jobs are ordered by score, then where they're the top applicant, then the newest posting. `top_applicant` is a yes or no, so other candidates' scores stay private.
+- Both views put strong matches before possible ones, so a match capped for missing experience never outranks one that fully qualifies. Within a tier, a candidate's jobs are ordered by score, then where they're the top applicant, then the newest posting. `top_applicant` is a yes or no, so other candidates' scores stay private.
 - Job titles aren't scored: candidates have no title to compare them with, and a title's meaning already comes through its skills.
 
 ## 4. Meaning of words (taxonomy)
