@@ -392,6 +392,7 @@ The rule: take the candidate with the highest mutual entailment, and auto-link i
   - **All or nothing:** each file runs in one transaction together with its history row, so it's applied completely or not at all.
   - **Lock:** an advisory lock stops two copies starting at once from applying the same file twice.
   - **Older databases:** `--mark-applied` records every file without running it, once, for a database set up by hand before the runner existed.
+  - **One file until the first release:** the schema grew through twelve migrations during development, several of which undid earlier ones. No shared database had run them, so they were merged into `001_init.sql`, which now shows the whole schema as it is. A local database that ran all of the old files already has this schema; one that ran only some of them needs a fresh start (`docker compose down -v`). After a release, changes go in new numbered files and existing ones are never edited.
 - **`docker compose up --build`** starts Postgres, waits for its healthcheck, then starts the API. On every start the API runs the migrations, then the seed, then serves. Both steps are safe to repeat: migrations skip what's applied, and the seed only inserts records that aren't stored (D-39).
 - **The image:** `python:3.12-slim`, running as an unprivileged user, with only the API's dependencies.
   - **Not included:** the model files and `onnxruntime`, `tokenizers` and `numpy`. They live in `requirements-linking.txt`, since the API doesn't use the model step (D-45).
@@ -446,7 +447,7 @@ A score is only useful if a recruiter can see what it's based on, so each entry 
 - **`score_breakdown`, only with `?explain=true`:** for skills, experience and culture: the factor's score, its weight, the **points** it adds (100 × weight × score), a sentence, and what matched and is missing. **The points add up to the score:** Michael for Sales Engineer is 46.7 + 20.0 + 5.0 = 71.7. This was checked on every entry of every view: 44 entries, all exact. For a job with no culture keywords, the weights shown are the rescaled 0.778 / 0.222.
 - **Why compact by default:** the numbers suit an audit of one candidate, not a list of many. The weight is the same on every entry, and a reader acts on *what matched and what is missing* ("ask about negotiation"), not on 46.7 points. This is the progressive-disclosure pattern production systems use: a short answer, the full detail on request.
 - **How it's built:** `?explain=true` is an optional query parameter of `GET /jobs/{id}/matches` and `GET /candidates/{id}/matches`. Without it, `score_breakdown` isn't sent at all, rather than sent as `null`. Scores, ranks and order are identical either way, as checked on every endpoint. POST and PATCH always return the compact view, and a value that isn't a boolean returns 422.
-- **Stored, not parsed:** matched and missing culture keywords are now stored with each match, like skills (migration 007). The reason text is never read back. `ALGORITHM_VERSION` went to 3, so every stored match is recomputed once (D-37).
+- **Stored, not parsed:** matched and missing culture keywords are now stored with each match, like skills. The reason text is never read back. `ALGORITHM_VERSION` went to 3, so every stored match is recomputed once (D-37).
 - **Simpler entries:** the flat `skill_score`, `matched_skills` and similar fields moved into `evidence`, so nothing is duplicated.
 - **The quirk stays a shown detail,** next to the evidence and never inside it (D-06). Scoring jokes was rejected on evidence: the model step reached only 67% precision even on plain words (D-45).
 
@@ -513,7 +514,7 @@ D-04 made the normalized name the identity, because the data has no email or id.
   - the same, through a PATCH.
   - A repeated name, or a repeated title with no company, is accepted.
 - **The cost, stated honestly:** while email is missing, the same person posted twice can't be detected; there is nothing to compare. The same goes for a job with no company. That's a limit of the data, not a rule the code can supply.
-- **Why `source_key`:** the batch writer linked skills to records by slug, which would mix up two people with the same name. Seed keys come from the name, so rerunning the seed still adds nobody twice; API keys are random. Existing rows got `seed:<slug>` in the migration, since their slugs were unique under the old rule.
+- **Why `source_key`:** the batch writer linked skills to records by slug, which would mix up two people with the same name. Seed keys come from the name, so rerunning the seed still adds nobody twice; API keys are random.
 - **Shown, never scored:** `email` in the candidate list, `company` in the job list and in a candidate's job matches, so namesakes and same-title jobs can be told apart. Matching uses ids only, so no score changed.
 - **Verified** on a throwaway database, 17 checks: seeding twice gives 15 and 6; namesakes are separate records with their own matches; email clashes are refused in any case, and by the database itself as a backstop; same title is refused at the same company, allowed at another or with none; PATCH follows the same rules; `email: null` clears it. The 16 tests pass.
 
@@ -572,7 +573,7 @@ Until now the taxonomy had ESCO's *shape* but almost none of its content: 51 mai
                → 3. optional models (D-54)                  → ¼ credit, or the review queue
                → 4. a person: approve / reject              → approved: full credit from now on
   ```
-- **The learning loop (migration 010, two endpoints):**
+- **The learning loop (two endpoints):**
   - `POST /taxonomy/suggestions/{type}/{term}/approve` with `{"concept": "<slug>"}`, or no body to accept the model's best concept. The word becomes a synonym (credit 1.0) for every record, now and later, and survives every reseed.
   - `POST /taxonomy/suggestions/{type}/{term}/reject`: the word loses any suggested credit and is never suggested again.
   - Both refresh every affected match in the same transaction.
@@ -604,7 +605,7 @@ Until now the taxonomy had ESCO's *shape* but almost none of its content: 51 mai
 Before, the minimum was fully soft: a candidate with every skill and **0 of 8 required years** scored 80.0, a **strong match**. The score was right by the formula, but the label claimed a fit the job's own requirement says is missing.
 
 - **Production practice:** ATS platforms (Greenhouse, Workday, Lever) separate *required* from *preferred* qualifications, and the job owner chooses. A required one is a knockout, a preferred one only lowers the ranking, and either way the gap is shown, not hidden. The system shouldn't guess a hiring policy.
-- **So, per job, `experience_requirement`** (migration 011):
+- **So, per job, `experience_requirement`:**
 
   | Setting | Below the minimum |
   |---|---|
@@ -622,7 +623,7 @@ Before, the minimum was fully soft: a candidate with every skill and **0 of 8 re
   - his strong matches for other jobs were unaffected;
   - an unknown setting, or a null one in PATCH, returns 422.
 - **Not done:** a tolerance band ("within a year of the minimum counts"). That's a per-job policy for the job owner, and it can be added the same way.
-- **Revised: `required` is now the default for every job** (migration 012, `ALGORITHM_VERSION` 6).
+- **Revised: `required` is now the default for every job** (`ALGORITHM_VERSION` 6).
   - **Why:** a stated minimum is treated as a must, so nothing is assumed to be negotiable. `preferred` stays available for a job owner who chooses it later. This replaces D-13's "the minimum is soft" reading for listing purposes; extra years still earn nothing extra.
   - **Effect:** 2 of 38 matches disappeared, both near misses (Steeven, 0 of 3 years; Elle for Incident Commander, 3 of 4). No other score or tier changed.
   - **A consequence to know:** every listed match now meets the minimum, so its experience part is always full: 20 points for everyone. Experience decides *who is listed*, not the order among them; skills (70%) and culture (10%) do the ranking. For a `preferred` job, experience still ranks in proportion.

@@ -33,7 +33,7 @@ UNLOCK_SQL = "SELECT pg_advisory_unlock(hashtext('recruiter_bot.migrate'))"
 
 
 def migration_files() -> list[Path]:
-    """001_init.sql, 002_concepts.sql, ...: the numbered prefix fixes the order."""
+    """001_init.sql, 002_..., ...: the numbered prefix fixes the order."""
     return sorted(MIGRATIONS_DIR.glob("*.sql"))
 
 
