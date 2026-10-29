@@ -1,4 +1,4 @@
-"""Loads and checks the labelled cases the linking stages are measured against (D-42)."""
+"""Loads and checks the labelled cases the linking stages are measured against."""
 import hashlib
 import json
 from collections import Counter

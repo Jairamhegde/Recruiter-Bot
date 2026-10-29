@@ -10,12 +10,12 @@ END;
 $$;
 
 
--- Table: skills
+-- skills: every skill term in use, one row per normalized spelling
 CREATE TABLE skills (
     skill_id     BIGINT       GENERATED ALWAYS AS IDENTITY,
     slug         TEXT         NOT NULL,
     compact_key  TEXT         GENERATED ALWAYS AS (replace(slug, '-', '')) STORED,
-    root_key     TEXT,  -- groups unknown words with an index lookup (D-41)
+    root_key     TEXT,
     created_at   TIMESTAMPTZ  NOT NULL DEFAULT now(),
 
     CONSTRAINT skills_pk             PRIMARY KEY (skill_id),
@@ -27,12 +27,12 @@ CREATE TABLE skills (
 CREATE INDEX skills_root_key_idx ON skills (root_key);
 
 
--- Table: traits
+-- traits: every personality trait and culture keyword in use
 CREATE TABLE traits (
     trait_id     BIGINT       GENERATED ALWAYS AS IDENTITY,
     slug         TEXT         NOT NULL,
     compact_key  TEXT         GENERATED ALWAYS AS (replace(slug, '-', '')) STORED,
-    root_key     TEXT,  -- groups unknown words with an index lookup (D-41)
+    root_key     TEXT,
     created_at   TIMESTAMPTZ  NOT NULL DEFAULT now(),
 
     CONSTRAINT traits_pk             PRIMARY KEY (trait_id),
@@ -44,10 +44,7 @@ CREATE TABLE traits (
 CREATE INDEX traits_root_key_idx ON traits (root_key);
 
 
--- Table: candidates
--- Names aren't unique (D-53): identity is the optional email, unique when present (NULLs never clash).
--- source_key, always filled, is the internal key the writers and the seed use to recognise a record:
--- 'seed:<slug>' for seed records, 'api:<random id>' for records added through the API.
+-- candidates: one row per person; the optional email is their identity
 CREATE TABLE candidates (
     candidate_id           BIGINT       GENERATED ALWAYS AS IDENTITY,
     source_key             TEXT         NOT NULL,
@@ -79,7 +76,7 @@ CREATE TRIGGER candidates_set_updated_at
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 
--- Table: candidate_skills
+-- candidate_skills: the skills each candidate has
 CREATE TABLE candidate_skills (
     candidate_id  BIGINT  NOT NULL,
     skill_id      BIGINT  NOT NULL,
@@ -94,7 +91,7 @@ CREATE TABLE candidate_skills (
 CREATE INDEX candidate_skills_skill_idx ON candidate_skills (skill_id);
 
 
--- Table: candidate_traits
+-- candidate_traits: the traits each candidate has
 CREATE TABLE candidate_traits (
     candidate_id  BIGINT  NOT NULL,
     trait_id      BIGINT  NOT NULL,
@@ -109,9 +106,7 @@ CREATE TABLE candidate_traits (
 CREATE INDEX candidate_traits_trait_idx ON candidate_traits (trait_id);
 
 
--- Table: candidate_job_preferences
--- Stored now, not yet used in matching (D-47).
--- One row per preference, like skills and traits (D-20), so a future matching step can join on it.
+-- candidate_job_preferences: roles a candidate wants; stored, not scored
 CREATE TABLE candidate_job_preferences (
     candidate_id  BIGINT  NOT NULL,
     preference    TEXT    NOT NULL,
@@ -123,12 +118,7 @@ CREATE TABLE candidate_job_preferences (
 );
 
 
--- Table: jobs
--- Titles aren't unique (D-53): identity is the optional company together with the title,
--- unique when the company is present. source_key works as for candidates.
--- experience_requirement (D-56): whether min_experience_years is a must.
---   required:  below the minimum, there is no match at all, like a missing skill set (D-12). The default.
---   preferred: below the minimum, the score drops in proportion and the match is at most a possible_match.
+-- jobs: one row per opening; company plus title is its identity
 CREATE TABLE jobs (
     job_id                  BIGINT       GENERATED ALWAYS AS IDENTITY,
     source_key              TEXT         NOT NULL,
@@ -150,7 +140,6 @@ CREATE TABLE jobs (
     CONSTRAINT jobs_experience_requirement_ck CHECK (experience_requirement IN ('required', 'preferred'))
 );
 
--- The composite key: one title per company, ignoring the company's letter case.
 CREATE UNIQUE INDEX jobs_company_title_uq ON jobs (lower(company), slug);
 
 CREATE TRIGGER jobs_set_updated_at
@@ -158,7 +147,7 @@ CREATE TRIGGER jobs_set_updated_at
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 
--- Table: job_skills
+-- job_skills: the skills each job requires
 CREATE TABLE job_skills (
     job_id    BIGINT  NOT NULL,
     skill_id  BIGINT  NOT NULL,
@@ -173,7 +162,7 @@ CREATE TABLE job_skills (
 CREATE INDEX job_skills_skill_idx ON job_skills (skill_id);
 
 
--- Table: job_culture_traits
+-- job_culture_traits: the culture keywords each job looks for
 CREATE TABLE job_culture_traits (
     job_id    BIGINT  NOT NULL,
     trait_id  BIGINT  NOT NULL,
@@ -188,15 +177,13 @@ CREATE TABLE job_culture_traits (
 CREATE INDEX job_culture_traits_trait_idx ON job_culture_traits (trait_id);
 
 
--- Table: matches
--- Stores everything the API returns, so reads never recompute (D-37).
--- The matched and missing lists are the evidence for every match (D-50), so the API never parses the reason text.
+-- matches: the stored score, reason and evidence for every candidate-job pair
 CREATE TABLE matches (
     job_id             BIGINT        NOT NULL,
     candidate_id       BIGINT        NOT NULL,
     skill_score        NUMERIC(4,3)  NOT NULL,
     experience_score   NUMERIC(4,3)  NOT NULL,
-    culture_score      NUMERIC(4,3),  -- NULL when the job has no culture keywords (D-32)
+    culture_score      NUMERIC(4,3),
     score              NUMERIC(4,1)  NOT NULL,
     reason             TEXT          NOT NULL,
     matched_skills     TEXT[]        NOT NULL DEFAULT '{}',
@@ -221,7 +208,7 @@ CREATE INDEX matches_job_rank_idx       ON matches (job_id, score DESC);
 CREATE INDEX matches_candidate_rank_idx ON matches (candidate_id, score DESC);
 
 
--- Table: ingestion_events
+-- ingestion_events: every record received, accepted or rejected with its reason
 CREATE TABLE ingestion_events (
     event_id     BIGINT       GENERATED ALWAYS AS IDENTITY,
     entity_type  TEXT         NOT NULL,
@@ -245,11 +232,7 @@ CREATE TABLE ingestion_events (
 CREATE INDEX ingestion_events_received_idx ON ingestion_events (received_at DESC);
 
 
--- Taxonomy (D-29, D-30): ESCO-shaped concepts with preferred, alternative and hidden labels.
-
-
--- Table: concepts
--- source marks concepts created by grouping unknown words (D-41), so a review can tell them from curated ones.
+-- concepts: ESCO-shaped skill and trait concepts
 CREATE TABLE concepts (
     concept_id       BIGINT       GENERATED ALWAYS AS IDENTITY,
     concept_type     TEXT         NOT NULL,
@@ -261,7 +244,6 @@ CREATE TABLE concepts (
 
     CONSTRAINT concepts_pk             PRIMARY KEY (concept_id),
     CONSTRAINT concepts_slug_uq        UNIQUE (concept_type, slug),
-    -- Lets labels and relations reference (concept_id, concept_type) to stay within one type.
     CONSTRAINT concepts_id_type_uq     UNIQUE (concept_id, concept_type),
     CONSTRAINT concepts_type_ck        CHECK (concept_type IN ('skill', 'trait')),
     CONSTRAINT concepts_slug_format_ck CHECK (slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'),
@@ -269,8 +251,7 @@ CREATE TABLE concepts (
 );
 
 
--- Table: concept_labels
--- An automatic label (D-41) records how it was linked (method) and why (evidence).
+-- concept_labels: the words that name each concept; a word belongs to one concept per type
 CREATE TABLE concept_labels (
     concept_id    BIGINT  NOT NULL,
     concept_type  TEXT    NOT NULL,
@@ -282,7 +263,6 @@ CREATE TABLE concept_labels (
     method        TEXT,
     evidence      TEXT,
 
-    -- One concept per label within a type, so a word never means two things.
     CONSTRAINT concept_labels_pk           PRIMARY KEY (concept_type, compact_key),
     CONSTRAINT concept_labels_concept_fk   FOREIGN KEY (concept_id, concept_type)
                                            REFERENCES concepts (concept_id, concept_type) ON DELETE CASCADE,
@@ -298,13 +278,10 @@ CREATE TABLE concept_labels (
 CREATE INDEX concept_labels_concept_idx  ON concept_labels (concept_id);
 CREATE INDEX concept_labels_root_key_idx ON concept_labels (concept_type, root_key);
 
--- Exactly one preferred label per concept; the loader checks that it exists.
 CREATE UNIQUE INDEX concept_labels_one_preferred_uq ON concept_labels (concept_id) WHERE label_type = 'preferred';
 
 
--- Table: concept_relations
--- Related or reviewed-unrelated concepts of the same type (D-29, D-30).
--- One directed row per pair; symmetric relations are stored both ways.
+-- concept_relations: related or reviewed-unrelated concept pairs, stored both ways
 CREATE TABLE concept_relations (
     from_concept_id  BIGINT        NOT NULL,
     to_concept_id    BIGINT        NOT NULL,
@@ -325,22 +302,14 @@ CREATE TABLE concept_relations (
 CREATE INDEX concept_relations_to_idx ON concept_relations (to_concept_id);
 
 
--- Table: term_suggestions
--- Conclusions about words the rules couldn't place.
--- From the optional model stage (D-54), recomputed by every seed run:
---   linked:   confident enough to earn capped "suggested" credit toward concept_slug, never full synonym credit.
---   review:   plausible but not confident; a person decides, using the suggestions (best first).
--- From a person's review (D-55), the learning loop:
---   approved: the word means concept_slug; it earns full synonym credit and survives every reseed.
---   rejected: the word is not that concept; the model stage never suggests it again.
--- A word with no plausible concept gets no row and stays unknown.
+-- term_suggestions: model suggestions and reviewer decisions for unknown words
 CREATE TABLE term_suggestions (
     concept_type   TEXT         NOT NULL,
-    term           TEXT         NOT NULL,  -- the word's slug, as stored in skills or traits
+    term           TEXT         NOT NULL,
     outcome        TEXT         NOT NULL,
-    concept_slug   TEXT,                   -- for linked and approved: the concept the word earns credit toward
-    suggestions    TEXT[]       NOT NULL DEFAULT '{}',  -- for review: concept slugs, best first
-    evidence       TEXT         NOT NULL,  -- the model scores behind the decision, in words
+    concept_slug   TEXT,
+    suggestions    TEXT[]       NOT NULL DEFAULT '{}',
+    evidence       TEXT         NOT NULL,
     model_version  TEXT         NOT NULL,
     created_at     TIMESTAMPTZ  NOT NULL DEFAULT now(),
     reviewed_at    TIMESTAMPTZ,

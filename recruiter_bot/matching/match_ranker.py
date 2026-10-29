@@ -4,8 +4,7 @@ from recruiter_bot.matching.match_scorer import MatchResult, score_match
 from recruiter_bot.matching.profile_reader import load_candidate_profiles, load_job_profiles
 from recruiter_bot.matching.term_credit import TermCredit, load_taxonomy_credit
 
-# Each ranker only fixes one side and orders the other (D-32). A signal that belongs to
-# one side, such as candidate preferences, would be added here, never in score_match.
+# Each ranker fixes one side and orders the other; one-sided signals go here.
 
 
 def rank_candidates_for_job(
@@ -18,7 +17,7 @@ def rank_candidates_for_job(
     job = jobs[0]
     credit = credit or load_taxonomy_credit(conn)
 
-    # One sorted list; each result carries its tier, so callers can group without losing any (D-34).
+    # One sorted list; each result carries its tier, so callers can group without losing any.
     results = []
     for candidate in load_candidate_profiles(conn):
         result = score_match(candidate, job, credit)

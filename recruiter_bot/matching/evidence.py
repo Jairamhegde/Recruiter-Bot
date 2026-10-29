@@ -1,15 +1,4 @@
-"""Why a match has its score (D-50).
-
-One calculation, two views of it:
-- the default response shows only what matched and what is missing;
-- with ?explain=true it also shows the score, weight and points of each factor.
-
-    score = skills points + experience points + culture points
-    points = 100 x weight x factor score
-
-So with explain, a recruiter can check every number: Michael for Sales Engineer is
-46.7 (skills) + 20.0 (experience) + 5.0 (culture) = 71.7.
-"""
+"""Why a match has its score: matched and missing by default, points with ?explain=true."""
 from dataclasses import dataclass
 
 from recruiter_bot.matching.match_scorer import CULTURE_WEIGHT, EXPERIENCE_WEIGHT, SKILL_WEIGHT
@@ -35,7 +24,7 @@ class MatchEvidence:
 
 def evidence_for(match: StoredMatch) -> MatchEvidence:
     if match.culture_score is None:
-        # The job has no culture keywords: the other two weights are rescaled to add up to 1 (D-32).
+        # The job has no culture keywords: the other two weights are rescaled to add up to 1.
         skills_weight = SKILL_WEIGHT / (SKILL_WEIGHT + EXPERIENCE_WEIGHT)
         experience_weight = EXPERIENCE_WEIGHT / (SKILL_WEIGHT + EXPERIENCE_WEIGHT)
     else:
@@ -76,7 +65,7 @@ def _points(weight: float, score: float) -> float:
 
 
 def _coverage_in_words(score: float, matched: list[str], missing: list[str], noun: str) -> str:
-    """'1.5 of 3 required skills': partial credit (a related skill, D-29) can make the first number a fraction."""
+    """'1.5 of 3 required skills': partial credit (a related skill) can make the first number a fraction."""
     listed = len(matched) + len(missing)
     earned = round(score * listed, 2)
     return f"{earned:g} of {listed} {noun}"

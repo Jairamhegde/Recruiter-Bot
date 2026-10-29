@@ -81,8 +81,7 @@ class ApproveRequest(BaseModel):
 
 @router.get("/suggestions", response_model=Suggestions)
 def list_suggestions() -> Suggestions:
-    """Words the taxonomy didn't know, and what became of them (D-54, D-55): the model's capped guesses,
-    the words waiting for review, and every decision a person made."""
+    """Every suggested link, the review queue, and each reviewer decision."""
     status, reason = model_linking_status()
     result = Suggestions(model_linking=status, reason=reason, linked=[], review=[], approved=[], rejected=[])
     with connect() as conn:
@@ -100,16 +99,14 @@ def list_suggestions() -> Suggestions:
 
 @router.post("/suggestions/{concept_type}/{term}/approve", response_model=Decision)
 def approve(concept_type: ConceptType, term: str, request: ApproveRequest | None = None) -> Decision:
-    """A person confirms what a word means. From now on it earns full synonym credit, and every
-    match using it is refreshed now (D-55)."""
+    """A person confirms a word's concept: full synonym credit from now on."""
     chosen = request.concept if request else None
     return _decide(concept_type, term, "approved", chosen)
 
 
 @router.post("/suggestions/{concept_type}/{term}/reject", response_model=Decision)
 def reject(concept_type: ConceptType, term: str) -> Decision:
-    """A person says the model's guess is wrong. The word loses any suggested credit and is never
-    suggested again; every match using it is refreshed now (D-55)."""
+    """A person rejects the model's guess: no credit, and never suggested again."""
     return _decide(concept_type, term, "rejected", None)
 
 
@@ -136,6 +133,6 @@ def _decide(concept_type: str, raw_term: str, outcome: str, chosen: str | None) 
 
         evidence = f"{outcome} by a person" + (f"; the model had said {current[0]}" if current else "")
         conn.execute(RECORD_DECISION_SQL, (concept_type, term, outcome, concept, current[2] if current else [], evidence))
-        # Same transaction, so nobody sees the decision without the scores that follow from it (D-37).
+        # Same transaction, so nobody sees the decision without the scores that follow from it.
         refresh_matches_for_terms(conn, {concept_type: [term]})
     return Decision(concept_type=concept_type, term=term, outcome=outcome, concept=concept, evidence=evidence)

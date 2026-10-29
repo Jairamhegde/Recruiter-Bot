@@ -10,8 +10,8 @@ class JobProfile:
     min_experience_years: int
     required_skills: list[str]
     culture_keywords: list[str] = field(default_factory=list)
-    company: str | None = None  # shown, never scored (D-53)
-    experience_requirement: str = "required"  # "required" (the default) or "preferred" (D-56)
+    company: str | None = None  # shown, never scored
+    experience_requirement: str = "required"  # "required" (the default) or "preferred"
 
 
 @dataclass(frozen=True)
@@ -21,8 +21,8 @@ class CandidateProfile:
     experience_years: int
     skills: list[str]
     traits: list[str] = field(default_factory=list)
-    job_preferences: list[str] = field(default_factory=list)  # read, but not scored yet (D-47)
-    email: str | None = None  # shown, never scored (D-53)
+    job_preferences: list[str] = field(default_factory=list)  # read, but not scored yet
+    email: str | None = None  # shown, never scored
 
 
 JOB_PROFILES_SQL = """

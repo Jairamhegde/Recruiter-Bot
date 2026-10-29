@@ -5,7 +5,7 @@ import psycopg
 from recruiter_bot.ingest.taxonomy.review_hints import ConceptHint, suggest_concepts
 from recruiter_bot.ingest.taxonomy.taxonomy_reader import Taxonomy
 
-# Unknown: no label of that type in the taxonomy (D-31).
+# Unknown: no label of that type in the taxonomy.
 UNKNOWN_SKILLS_SQL = """
     SELECT skills.slug
     FROM skills
@@ -26,8 +26,7 @@ UNKNOWN_TRAITS_SQL = """
     ORDER BY traits.slug
 """
 
-# Unmatched: no term on the other side earns credit for it, whether by being the
-# same term, a label of the same concept, or a label of a related concept (D-29).
+# Unmatched: nothing on the other side earns credit for it.
 UNMATCHED_SKILLS_SQL = """
     WITH skill_concept_ids AS (
         SELECT skills.skill_id, concept_labels.concept_id

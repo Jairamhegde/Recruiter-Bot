@@ -1,9 +1,4 @@
-"""The internal key that identifies a stored record (D-53).
-
-Names and titles aren't unique, so the writers and the seed can't use them to recognise a record.
-A seed record's key comes from its name, so running the seed again finds it and adds nobody twice.
-A record added through the API gets a random key, so two people with the same name are two records.
-"""
+"""The internal key of a stored record: 'seed:<slug>' or 'api:<random id>'."""
 import uuid
 
 

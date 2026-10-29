@@ -1,10 +1,4 @@
-"""Applies the SQL files in migrations/ that this database hasn't run yet, in name order (D-19, D-46).
-
-Usage:
-    python -m recruiter_bot.migrate                  apply every pending migration
-    python -m recruiter_bot.migrate --mark-applied   record every file as applied without running it,
-                                                     once, for a database set up by hand before this runner
-"""
+"""Applies pending SQL migrations in name order. Usage: python -m recruiter_bot.migrate [--mark-applied]"""
 import sys
 from pathlib import Path
 
@@ -52,6 +46,7 @@ def apply_pending(conn: psycopg.Connection) -> list[str]:
         applied.append(path.name)
     return applied
 
+
 def mark_all_applied(conn: psycopg.Connection) -> list[str]:
     marked = []
     for path in pending_files(conn):
@@ -59,6 +54,7 @@ def mark_all_applied(conn: psycopg.Connection) -> list[str]:
             conn.execute(RECORD_SQL, (path.name,))
         marked.append(path.name)
     return marked
+
 
 def main() -> None:
     mark_only = sys.argv[1:] == ["--mark-applied"]

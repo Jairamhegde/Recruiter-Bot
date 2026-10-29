@@ -20,11 +20,11 @@ class JobRejected(ValueError):
 
 
 class JobExists(ValueError):
-    """The same company already has a job with this title (D-53)."""
+    """The same company already has a job with this title."""
 
 
 def add_job(conn: psycopg.Connection, raw_job: Any, source: str = "api") -> int:
-    """Validates and stores one new job like the seed does, with its matches (D-40). Returns its job_id."""
+    """Validates and stores one new job like the seed does, with its matches. Returns its job_id."""
     extraction = extract_jobs([raw_job], source)
     if extraction.rejected:
         log_rejected(conn, "job", source, extraction.rejected)
@@ -38,8 +38,7 @@ def add_job(conn: psycopg.Connection, raw_job: Any, source: str = "api") -> int:
             raise JobExists(f"{record.company!r} already has a job titled {record.title!r}")
         insert_batch(conn, build_candidate_batch([]), build_job_batch([record]), source=source)
         job_id = conn.execute(JOB_ID_BY_KEY_SQL, (record.source_key,)).fetchone()[0]
-        # Same transaction, so nobody sees the job without its matches (D-37).
-        # Unknown words are linked first, so this record's matches already use the links (D-41).
+        # Same transaction, so the job never appears without its matches.
         link_record_terms(conn, record.skill_slugs, record.culture_trait_slugs)
         refresh_job_matches(conn, job_id)
         return job_id

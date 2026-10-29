@@ -2,6 +2,8 @@
 
 Ranks candidates for a job, and jobs for a candidate. Every match has a score, a tier and a reason that says exactly **what matched and what is missing**. Built with Python, FastAPI and PostgreSQL, using **raw, hand-written SQL only** (psycopg 3, no ORM or query builder).
 
+**New here? Start with [how it works, in one picture](docs/architecture.png).**
+
 ## Run it locally
 
 You need only **Docker Desktop**, running.
@@ -12,7 +14,7 @@ cd RecruitorBot
 docker compose up --build
 ```
 
-When the terminal shows `Uvicorn running on http://0.0.0.0:8000`, open **http://127.0.0.1:8000/docs** to try every endpoint in the browser. On startup the app creates the schema, loads the 15 candidates and 6 jobs, and computes every match.
+When the terminal shows `Recruiter Bot is ready: open http://127.0.0.1:8000/docs in your browser`, open that address to try every endpoint. Don't use the `http://0.0.0.0:8000` line Uvicorn prints after it: that address only works inside the container. On startup the app creates the schema, loads the 15 candidates and 6 jobs, and computes every match.
 
 ```bash
 curl http://127.0.0.1:8000/jobs/6/matches           # ranked candidates for a job
@@ -111,6 +113,8 @@ Every entry also has an `evidence` block listing matched and missing skills and 
 
 ## Decisions and trade-offs
 
+The key choices are below. **Every decision, with what it replaced and why, is in [docs/DECISION.md](docs/DECISION.md).**
+
 **Coverage over all-or-nothing skills.** Jobs don't mark any skill as optional, so every listed skill counts equally. But no candidate has all three Engineering Manager skills, so a strict rule would leave that job empty. Coverage ranks Miranda (2 of 3) and Ted sensibly instead.
 
 **Skills dominate, and the weights were checked.** With no hiring outcomes to learn weights from, a sensitivity analysis (`python -m recruiter_bot.sensitivity.report`) re-ranked every job under other weightings. Moving any single weight by ±0.05 or ±0.10 never changes a job's winner. Across 31 plausible weightings, 5 of the 6 winners are never beaten. The one exception needs culture weighted above a third of skills. Culture's real role is separating otherwise equal candidates.
@@ -158,4 +162,4 @@ I used Claude (Anthropic) as an assistant for:
 
 ---
 
-**More detail:** [API reference](docs/API.md) · [Design decisions (D-01 to D-56)](DECISION.md) · [Database schema and ER diagram](docs/ER_DIAGRAM.md) ([image](docs/er_diagram.png), [editable draw.io](docs/er_diagram.drawio))
+**More detail:** [How it works](docs/architecture.png) ([editable draw.io](docs/architecture.drawio)) · [API reference](docs/API.md) · [Design decisions](docs/DECISION.md) · [Architecture and ER diagram](docs/ER_DIAGRAM_AND_ARCHITECTURE.md) ([image](docs/er_diagram.png), [editable draw.io](docs/er_diagram.drawio))

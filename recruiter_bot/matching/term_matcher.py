@@ -31,10 +31,7 @@ def compare_terms(
     concept_type: str,
     credit: TermCredit,
 ) -> TermComparison:
-    """score = credit earned / required terms (0 to 1). Each candidate term covers at most one requirement (D-32).
-
-    The pairing that earns the most credit in total is found exactly, in polynomial time (D-52).
-    """
+    """Credit earned / required terms; each candidate term covers one requirement at most."""
     if not required_terms:
         return TermComparison([], [], 0.0)
 
@@ -61,29 +58,14 @@ def compare_terms(
 
 
 def _weights(credits: list[list[Credit]], useful_columns: list[int]) -> list[list[int]]:
-    """One whole number per (requirement, candidate term): the credit, minus a tiny tie-break penalty.
-
-        weight = credit x BIG - rank x BASE^(position from the end)
-
-    The credit part comes first, so more credit always wins. The penalty only settles pairings with
-    exactly equal credit, going requirement by requirement from the first:
-    1. leave the requirement unpaired if that loses nothing (an unpaired requirement costs no penalty);
-    2. otherwise take the term with the most credit for it, then the one that sorts first alphabetically
-       (rank 1 is that best term, rank 2 the next, and so on, and a worse rank costs more).
-
-    Each requirement's penalty is worth more than all the later requirements' penalties added together,
-    like the digits of a number, so the first requirement is settled first. BIG is larger than every
-    penalty added together, so the penalties can never outweigh a real difference in credit.
-    The result is the same every time.
-    """
+    """Whole-number weights: credit first, then a tiny penalty that settles exact ties the same way."""
     rows = len(credits)
     base = len(useful_columns) + 1   # a rank never reaches this
     big = base ** rows               # more than all penalties added together
 
     weights = []
     for row in range(rows):
-        # This requirement's candidate terms that earn credit, best first: most credit, then alphabetical order.
-        # useful_columns is already alphabetical, so the position breaks credit ties.
+        # Terms that earn credit for this requirement, best first: most credit, then alphabetical.
         earning = [position for position, column in enumerate(useful_columns) if credits[row][column].value > 0]
         earning.sort(key=lambda position: (-credits[row][useful_columns[position]].value, position))
         rank_of = {position: rank for rank, position in enumerate(earning, start=1)}

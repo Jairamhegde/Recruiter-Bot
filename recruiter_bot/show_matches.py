@@ -1,7 +1,4 @@
-"""Prints ranked matches. Usage:
-    python -m recruiter_bot.show_matches job 1
-    python -m recruiter_bot.show_matches candidate 5
-"""
+"""Prints ranked matches. Usage: python -m recruiter_bot.show_matches job 1 | candidate 5"""
 import sys
 
 from recruiter_bot.db import connect

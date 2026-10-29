@@ -46,7 +46,7 @@ def _resolve_ids(
     if not unique_slugs:
         return {}
 
-    # The root key is stored so linking unknown words is an index lookup (D-41).
+    # The root key is stored so linking unknown words is an index lookup.
     conn.execute(insert_vocabulary_sql, (unique_slugs, [root_key(slug) for slug in unique_slugs]))
 
     keys = [compact_key(slug) for slug in unique_slugs]

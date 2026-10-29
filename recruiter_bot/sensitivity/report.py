@@ -1,14 +1,4 @@
-"""How much do the rankings depend on the choice of weights? (D-48)
-
-Usage: python -m recruiter_bot.sensitivity.report
-
-It reads every job's stored matches, then re-ranks them with different weights:
-1. Sanity check: the production weights must reproduce every stored score exactly.
-2. One weight at a time: each weight moved by +-0.05 and +-0.10 around production.
-3. A grid of every plausible weighting, keeping skills >= experience >= culture.
-For each, it reports whether each job's top candidate stays the same, which candidates
-change tier, and how similar the whole order stays (Kendall's tau).
-"""
+"""How much the rankings depend on the weights. Usage: python -m recruiter_bot.sensitivity.report"""
 import sys
 
 import psycopg

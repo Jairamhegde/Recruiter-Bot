@@ -1,9 +1,4 @@
-"""The two local models behind the meaning-based linking stages (D-42).
-
-Both turn text into numbers and nothing else; they know nothing about skills or thresholds.
-- EmbeddingModel: a phrase -> a vector. Phrases with similar meaning get similar vectors.
-- NliModel: a pair of sentences -> how likely the first implies, contradicts, or is neutral to the second.
-"""
+"""The two local models: an embedding model and an NLI model."""
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,8 +44,7 @@ class EmbeddingModel:
         return numpy.stack(rows)
 
     def _embed_one(self, phrase: str) -> numpy.ndarray:
-        # One phrase per run, never a padded batch: the int8 model scales its numbers over the whole
-        # batch, so batching would make a phrase's vector depend on the phrases next to it.
+        # One phrase per run: batching the int8 model makes a vector depend on its neighbours.
         encoding = self._tokenizer.encode(phrase)
         input_ids = numpy.array([encoding.ids], dtype=numpy.int64)
         attention_mask = numpy.array([encoding.attention_mask], dtype=numpy.int64)
@@ -123,7 +117,7 @@ def models_are_present(models_dir: Path = MODELS_DIR) -> bool:
 
 
 def load_models(models_dir: Path = MODELS_DIR) -> LinkingModels | None:
-    """Both models, or None when the files are missing. Linking then falls back to the rules alone (D-41)."""
+    """Both models, or None when the files are missing. Linking then falls back to the rules alone."""
     if not models_are_present(models_dir):
         return None
     return LinkingModels(embedding=EmbeddingModel(models_dir), nli=NliModel(models_dir))

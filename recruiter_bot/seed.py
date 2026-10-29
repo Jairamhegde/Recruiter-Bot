@@ -29,7 +29,7 @@ EXISTING_JOB_KEYS_SQL = "SELECT source_key FROM jobs WHERE source_key = ANY(%s)"
 
 
 def _not_yet_stored(conn, existing_keys_sql: str, records: list) -> list:
-    """Seed records are recognised by their source key ('seed:<slug>'), not by name (D-53)."""
+    """Seed records are recognised by their source key ('seed:<slug>'), not by name."""
     keys = [record.source_key for record in records]
     stored = {key for (key,) in conn.execute(existing_keys_sql, (keys,)).fetchall()}
     return [record for record in records if record.source_key not in stored]
@@ -40,8 +40,7 @@ def run(today: date | None = None) -> None:
     taxonomy = read_taxonomy(SEED_DIR / "taxonomy.json")
 
     with connect() as conn:
-        # The database clock is the single source of "today", so availability
-        # dates don't shift with the timezone of whoever runs the seed.
+        # The database clock is the one 'today', so dates don't depend on the runner's timezone.
         if today is None:
             today = conn.execute("SELECT current_date").fetchone()[0]
             conn.commit()
@@ -54,16 +53,15 @@ def run(today: date | None = None) -> None:
         _print_rejections("candidate", candidate_extraction.rejected)
         _print_rejections("job", job_extraction.rejected)
 
-        # One transaction for profiles, taxonomy and matches, so readers never see one without the others (D-37).
+        # One transaction for profiles, taxonomy and matches, so readers never see one without the others.
         with conn.transaction():
             conn.execute(INGEST_LOCK_SQL)
-            # The seed only bootstraps: stored records are never overwritten, so edits made
-            # through PATCH survive and availability dates don't restart (D-39).
+            # Stored records are never overwritten, so PATCH edits survive.
             new_candidates = _not_yet_stored(conn, EXISTING_CANDIDATE_KEYS_SQL, candidate_extraction.records)
             new_jobs = _not_yet_stored(conn, EXISTING_JOB_KEYS_SQL, job_extraction.records)
             result = insert_batch(conn, build_candidate_batch(new_candidates), build_job_batch(new_jobs), source="seed")
             taxonomy_result = save_taxonomy(conn, taxonomy)
-            # The reload removed every automatic label; the same rules recreate them (D-41).
+            # The reload removed every automatic label; the same rules recreate them.
             link_result = link_all_terms(conn)
             match_count = refresh_all_matches(conn)
         term_report = build_term_report(conn, taxonomy)

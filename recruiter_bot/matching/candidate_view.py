@@ -1,13 +1,4 @@
-"""The order of a candidate's jobs (D-51).
-
-1. Score: the fit, the same number the recruiter sees (D-15).
-2. Top applicant: jobs where no rival scores higher come first.
-3. Posting date: newer first, since older ads are more likely already filled.
-4. A neutral hash of the job and candidate ids, as in the recruiter's view (D-16).
-
-Score stays first: standing measures competition, not fit, and sorting by it first would push
-weak-fit jobs with few rivals above strong-fit ones.
-"""
+"""The order of a candidate's jobs: score, top applicant, newest posting, then a hash."""
 import hashlib
 from dataclasses import dataclass
 from datetime import datetime
@@ -26,14 +17,11 @@ class Standing:
 
     @property
     def is_top_applicant(self) -> bool:
-        """Nobody competing scores higher. Shown as a yes or no, since a count or percentage
-        in a small pool would reveal other candidates' scores."""
+        """Nobody competing scores higher; shown as yes or no, so others' scores stay private."""
         return self.above == 0
 
 
-# For each job this candidate matches: how many rivals score above them.
-# A rival is another candidate with a strong or possible match (50 or more) for the same job who
-# is open to opportunities: someone not looking isn't competing for the role right now.
+# Per job, how many open rivals (scoring 50 or more) score above this candidate.
 STANDINGS_SQL = """
     SELECT mine.job_id,
            count(rival.candidate_id) FILTER (WHERE rival.score > mine.score) AS above,
@@ -70,12 +58,12 @@ def preferences_of(conn: psycopg.Connection, candidate_id: int) -> set[str]:
 
 
 def neutral_hash(job_id: int, candidate_id: int) -> str:
-    """The same md5 as the recruiter's view uses in SQL (D-16): fixed, but favouring no one."""
+    """The same md5 as the recruiter's view uses in SQL: fixed, but favouring no one."""
     return hashlib.md5(f"{job_id}:{candidate_id}".encode()).hexdigest()
 
 
 def order_for_candidate(matches: list[StoredMatch], standings: dict[int, Standing]) -> list[StoredMatch]:
-    """The candidate's matches in the order of D-51."""
+    """The candidate's matches in ranked order."""
 
     def sort_key(match: StoredMatch):
         standing = standings[match.job_id]

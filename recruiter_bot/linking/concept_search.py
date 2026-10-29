@@ -1,10 +1,4 @@
-"""Stage 4: find the concepts closest in meaning to an unknown word (D-43).
-
-Each concept is represented by a few short texts (its labels, its name, its description).
-Every text is embedded once, when the index is built. A search embeds the unknown word,
-compares it with every text of the same type, and gives each concept the similarity of
-its closest text. Search only proposes candidates; stage 5 decides whether they are right.
-"""
+"""Stage 4: find the concepts closest in meaning to an unknown word."""
 from dataclasses import dataclass
 
 import numpy
@@ -12,8 +6,7 @@ import numpy
 from recruiter_bot.ingest.taxonomy.taxonomy_reader import Taxonomy
 from recruiter_bot.linking.models import EmbeddingModel
 
-# D-43: chosen on the calibration cases. Ten candidates keep the right concept in reach for 95% of them;
-# wrong candidates cost only a check in stage 5, while a missing one can never be linked.
+# Ten candidates keep the right concept in reach 95% of the time.
 CANDIDATE_COUNT = 10
 
 
@@ -90,6 +83,6 @@ class ConceptIndex:
 
 
 def build_concept_index(embedding_model: EmbeddingModel, taxonomy: Taxonomy) -> ConceptIndex:
-    """The production setting (D-43): labels, names and descriptions, with words in short sentences."""
+    """The production setting: labels, names and descriptions, with words in short sentences."""
     texts = texts_from_taxonomy(taxonomy, include_names=True, include_descriptions=True, with_context=True)
     return ConceptIndex(embedding_model, texts, with_context=True)
