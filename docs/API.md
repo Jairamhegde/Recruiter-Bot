@@ -186,18 +186,17 @@ curl http://127.0.0.1:8000/candidates
 
 **Order:**
 1. Score.
-2. Jobs whose title is one of the candidate's `job_preferences`.
-3. Their chance: the share of competing open candidates (scoring 50 or more for that job) they beat.
-4. The newest posting.
-5. A neutral hash of the ids.
+2. Jobs where the candidate is `top_applicant`: no competing open candidate (scoring 50 or more for that job) scores higher.
+3. The newest posting.
+4. A neutral hash of the ids.
 
 Each job entry also shows:
 
 | Field | Meaning |
 |---|---|
 | `tagline` | The job's tagline, never scored |
-| `top_applicant` | `true` when no competing candidate scores higher. The exact share is never shown, to protect other candidates. |
-| `matches_preference` | `true` when the job's title is one of the candidate's `job_preferences` |
+| `top_applicant` | `true` when no competing candidate scores higher. Shown as a yes or no, never a count, to protect other candidates. |
+| `matches_preference` | `true` when the job's title is one of the candidate's `job_preferences`. Shown only; it doesn't change the order. |
 
 | Query option | Default | Effect |
 |---|---|---|

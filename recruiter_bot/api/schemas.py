@@ -132,9 +132,9 @@ class JobMatch(OmitsEmptyBreakdown):
     score_breakdown: ScoreBreakdown | None = None  # only with ?explain=true
     meets_minimum_experience: bool  # false: the candidate is below the job's minimum years (D-56)
     tagline: str | None   # shown to the candidate, never scored (D-06)
-    # D-51: shown to the candidate. The exact standing is used only for ordering, never shown,
-    # because a percentage in a small pool would reveal other candidates' scores.
-    top_applicant: bool       # no open rival with a strong or possible match scores higher
+    # D-51: shown to the candidate as a yes or no, never a count or percentage, which in a small pool
+    # would reveal other candidates' scores.
+    top_applicant: bool       # no open rival with a strong or possible match scores higher; orders tied jobs
     matches_preference: bool  # the job's title is one of the candidate's job_preferences
 
     @classmethod
@@ -235,7 +235,7 @@ class ProactiveOffer(CandidateMatch):
 
 
 class CandidateMatches(BaseModel):
-    """The candidate's view: jobs ordered by score, preference, standing, posting date (D-51)."""
+    """The candidate's view: jobs ordered by score, top applicant, posting date (D-51)."""
     candidate_id: int
     matches: JobMatchesByTier
 
@@ -244,7 +244,7 @@ class CandidateMatches(BaseModel):
         cls, candidate_id: int, results: list[StoredMatch], standings: dict[int, Standing],
         preferences: set[str], explain: bool = False,
     ) -> "CandidateMatches":
-        ordered = order_for_candidate(results, standings, preferences)
+        ordered = order_for_candidate(results, standings)
         matches = JobMatchesByTier.from_results(ordered, standings, preferences, explain)
         return cls(candidate_id=candidate_id, matches=matches)
 

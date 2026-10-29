@@ -65,7 +65,7 @@ def candidate_matches(
     candidate_id: int,
     explain: bool = Query(False, description="Add the score, weight and points of each factor to every match (D-50)."),
 ) -> CandidateMatches:
-    """The candidate's jobs by tier: score first, then preference, standing and posting date (D-51)."""
+    """The candidate's jobs by tier: score first, then top applicant and posting date (D-51)."""
     with connect() as conn:
         response = matches_for(conn, candidate_id, explain)
 
