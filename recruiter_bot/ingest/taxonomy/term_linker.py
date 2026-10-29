@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import psycopg
 
@@ -16,7 +16,7 @@ class Link:
     term: str
     concept_type: str
     concept: str   # concept slug
-    method: str    # "root_key", "typo" or "group"
+    method: str    # "root_key", "typo", "group", or "model" for a suggested link (D-54)
     evidence: str  # the label it matched, or the words grouped together
 
 
@@ -25,6 +25,12 @@ class LinkResult:
     links: list[Link]
     negated: list[tuple[str, str]]          # (term, what it negates)
     ambiguous: list[tuple[str, list[str]]]  # (term, the concepts it could mean)
+    # The optional model stage (D-54), for words the rules left unplaced:
+    suggested: list[Link] = field(default_factory=list)                 # capped "suggested" credit
+    review: list[tuple[str, str, list[str]]] = field(default_factory=list)  # (type, term, suggestions)
+    model_status: str = "off"                                           # "on", "off" or "unavailable"
+    model_reason: str = ""
+    model_failed: list[tuple[str, str]] = field(default_factory=list)   # (term, error): left unknown
 
 
 HAS_LABEL_SQL = """
@@ -98,10 +104,12 @@ ALL_VOCABULARY_SQL = {
 
 
 def link_terms(conn: psycopg.Connection, concept_type: str, terms: list[str]) -> LinkResult:
-    """Links each term that has no label, by the deterministic stages of D-41. Run inside the caller's transaction."""
+    """Links each term that has no label, by the deterministic stages of D-41, then passes the words
+    still unplaced to the optional model stage (D-54). Run inside the caller's transaction."""
     links = []
     negated = []
     ambiguous = []
+    unplaced = []
     for term in sorted(set(terms)):
         if _has_label(conn, HAS_LABEL_SQL, concept_type, term):
             continue  # already known, possibly linked earlier in this loop by grouping
@@ -128,18 +136,35 @@ def link_terms(conn: psycopg.Connection, concept_type: str, terms: list[str]) ->
             links.append(_add_label(conn, concept_id, concept_slug, concept_type, term, "hidden", "typo", label))
             continue
 
-        links.extend(_group_unknown_words(conn, concept_type, key))
-    return LinkResult(links, negated, ambiguous)
+        grouped = _group_unknown_words(conn, concept_type, key)
+        links.extend(grouped)
+        if not grouped:
+            unplaced.append(term)
+
+    return _with_model_stage(conn, concept_type, LinkResult(links, negated, ambiguous), unplaced)
+
+
+def _with_model_stage(conn: psycopg.Connection, concept_type: str, result: LinkResult, unplaced: list[str]) -> LinkResult:
+    """Adds what the model stage concluded. It never raises, so the rules' result always stands (D-54)."""
+    # Imported here: the model stage is optional, and its heavy libraries load only when it runs.
+    from recruiter_bot.linking.model_stage import suggest_for_unknown_terms
+
+    stage = suggest_for_unknown_terms(conn, concept_type, unplaced)
+    suggested = [Link(s.term, s.concept_type, s.concept, "model", s.evidence) for s in stage.suggestions if s.outcome == "linked"]
+    review = [(s.concept_type, s.term, s.suggestions) for s in stage.suggestions if s.outcome == "review"]
+    return LinkResult(result.links, result.negated, result.ambiguous, suggested, review,
+                      stage.status, stage.reason, stage.failed)
 
 
 def link_record_terms(conn: psycopg.Connection, skills: list[str] | None, traits: list[str] | None) -> list[Link]:
     """For POST and PATCH: links the words one record brings, then refreshes the other records
     that use a newly linked word. The caller still refreshes the record itself."""
     links = []
-    if skills:
-        links.extend(link_terms(conn, "skill", skills).links)
-    if traits:
-        links.extend(link_terms(conn, "trait", traits).links)
+    for concept_type, terms in (("skill", skills), ("trait", traits)):
+        if terms:
+            result = link_terms(conn, concept_type, terms)
+            # A suggested link changes credit too, so the records using it are refreshed like any other link.
+            links.extend(result.links + result.suggested)
     if links:
         # Imported here: matching depends on ingest, so ingest only reaches into it when it must.
         from recruiter_bot.matching.match_store import refresh_matches_for_terms
@@ -152,9 +177,17 @@ def link_record_terms(conn: psycopg.Connection, skills: list[str] | None, traits
 
 def link_all_terms(conn: psycopg.Connection) -> LinkResult:
     """After a taxonomy load: fills missing root keys, then links the whole vocabulary."""
+    # The taxonomy may have changed, so every model decision is made again (D-54).
+    from recruiter_bot.linking.model_stage import clear_suggestions
+    clear_suggestions(conn)
+
     links = []
     negated = []
     ambiguous = []
+    suggested = []
+    review = []
+    failed = []
+    status, reason = "off", ""
     for concept_type in ("skill", "trait"):
         missing = [slug for (slug,) in conn.execute(MISSING_ROOT_KEYS_SQL[concept_type]).fetchall()]
         if missing:
@@ -165,7 +198,11 @@ def link_all_terms(conn: psycopg.Connection) -> LinkResult:
         links.extend(result.links)
         negated.extend(result.negated)
         ambiguous.extend(result.ambiguous)
-    return LinkResult(links, negated, ambiguous)
+        suggested.extend(result.suggested)
+        review.extend(result.review)
+        failed.extend(result.model_failed)
+        status, reason = result.model_status, result.model_reason
+    return LinkResult(links, negated, ambiguous, suggested, review, status, reason, failed)
 
 
 def _has_label(conn: psycopg.Connection, sql: str, concept_type: str, term: str) -> bool:

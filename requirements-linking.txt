@@ -1,0 +1,5 @@
+# Only for the model-based linking experiment (D-42 to D-45), which the API doesn't use.
+# Install with: pip install -r requirements-linking.txt
+numpy==2.5.4
+onnxruntime==1.31.1
+tokenizers==0.23.3

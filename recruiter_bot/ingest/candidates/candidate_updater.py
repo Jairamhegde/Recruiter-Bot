@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from recruiter_bot.ingest.batch_inserter import INGEST_LOCK_SQL
 from recruiter_bot.ingest.candidates.candidate_creator import CandidateExists, CandidateRejected
+from recruiter_bot.ingest.candidates.candidate_extractor import EMAIL_PATTERN
 from recruiter_bot.ingest.event_log_writer import log_accepted, log_rejected
 from recruiter_bot.ingest.record_errors import RecordError
 from recruiter_bot.ingest.text_normalizer import normalize_list, normalize_required, parse_availability
@@ -25,6 +26,7 @@ class CandidatePatch(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     name: str | None = Field(default=None, min_length=1)
+    email: str | None = Field(default=None, pattern=EMAIL_PATTERN)  # null clears it
     skills: list[str] | None = Field(default=None, min_length=1)
     experience_years: int | None = Field(default=None, ge=0, le=70, strict=True)
     availability: str | None = Field(default=None, min_length=1)
@@ -41,17 +43,17 @@ class CandidatePatch(BaseModel):
 
 
 CURRENT_CANDIDATE_SQL = """
-    SELECT slug, full_name, experience_years, open_to_opportunities, available_from, quirk
+    SELECT slug, full_name, email, experience_years, open_to_opportunities, available_from, quirk
     FROM candidates
     WHERE candidate_id = %s
     FOR UPDATE
 """
 
-OTHER_CANDIDATE_WITH_SLUG_SQL = "SELECT EXISTS (SELECT 1 FROM candidates WHERE slug = %s AND candidate_id <> %s)"
+OTHER_CANDIDATE_WITH_EMAIL_SQL = "SELECT EXISTS (SELECT 1 FROM candidates WHERE email = %s AND candidate_id <> %s)"
 
 UPDATE_CANDIDATE_SQL = """
     UPDATE candidates
-    SET slug = %s, full_name = %s, experience_years = %s,
+    SET slug = %s, full_name = %s, email = %s, experience_years = %s,
         open_to_opportunities = %s, available_from = %s, quirk = %s
     WHERE candidate_id = %s
 """
@@ -106,16 +108,20 @@ def update_candidate(conn: psycopg.Connection, candidate_id: int, patch: Candida
         current = conn.execute(CURRENT_CANDIDATE_SQL, (candidate_id,)).fetchone()
         if current is None:
             raise CandidateNotFound(f"No candidate with id {candidate_id}")
-        current_slug, full_name, experience_years, open_to_opportunities, available_from, quirk = current
+        current_slug, full_name, email, experience_years, open_to_opportunities, available_from, quirk = current
 
-        if slug is not None and conn.execute(OTHER_CANDIDATE_WITH_SLUG_SQL, (slug, candidate_id)).fetchone()[0]:
-            raise CandidateExists(f"a candidate named {patch.name!r} already exists")
+        # Names may repeat (D-53); only an email can clash.
+        if "email" in sent:
+            email = patch.email.lower() if patch.email else None
+            if email is not None and conn.execute(OTHER_CANDIDATE_WITH_EMAIL_SQL, (email, candidate_id)).fetchone()[0]:
+                raise CandidateExists(f"a candidate with email {email!r} already exists")
         if availability is not None:
             open_to_opportunities, available_from = availability
 
         conn.execute(UPDATE_CANDIDATE_SQL, (
             slug or current_slug,
             patch.name if "name" in sent else full_name,
+            email,
             patch.experience_years if "experience_years" in sent else experience_years,
             open_to_opportunities,
             available_from,

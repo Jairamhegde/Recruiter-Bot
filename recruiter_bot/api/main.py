@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from recruiter_bot.api import candidates, jobs
+from recruiter_bot.api import candidates, jobs, suggestions
 from recruiter_bot.db import connect
 from recruiter_bot.matching import refresh_if_stale
 
@@ -23,3 +23,4 @@ app = FastAPI(
 )
 app.include_router(jobs.router)
 app.include_router(candidates.router)
+app.include_router(suggestions.router)

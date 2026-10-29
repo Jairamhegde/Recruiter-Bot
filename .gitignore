@@ -39,9 +39,7 @@ desktop.ini
 # Downloaded model files (python -m recruiter_bot.linking.model_files)
 models/
 
-# The model-based linking experiment (D-42 to D-45): kept locally, not part of the submitted project
-recruiter_bot/linking/
-requirements-linking.txt
-
 # Claude Code local settings
 .claude/settings.local.json
+
+PROJECT_CONTEXT.md

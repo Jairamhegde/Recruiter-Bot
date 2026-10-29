@@ -10,7 +10,9 @@ from recruiter_bot.ingest.jobs.job_extractor import extract_jobs
 from recruiter_bot.ingest.taxonomy.term_linker import link_record_terms
 from recruiter_bot.matching.match_store import refresh_job_matches
 
-JOB_ID_BY_SLUG_SQL = "SELECT job_id FROM jobs WHERE slug = %s"
+JOB_ID_BY_KEY_SQL = "SELECT job_id FROM jobs WHERE source_key = %s"
+
+JOB_AT_COMPANY_SQL = "SELECT EXISTS (SELECT 1 FROM jobs WHERE lower(company) = lower(%s) AND slug = %s)"
 
 
 class JobRejected(ValueError):
@@ -18,12 +20,12 @@ class JobRejected(ValueError):
 
 
 class JobExists(ValueError):
-    """A job with the same title (slug) is already stored."""
+    """The same company already has a job with this title (D-53)."""
 
 
 def add_job(conn: psycopg.Connection, raw_job: Any, source: str = "api") -> int:
     """Validates and stores one new job like the seed does, with its matches (D-40). Returns its job_id."""
-    extraction = extract_jobs([raw_job])
+    extraction = extract_jobs([raw_job], source)
     if extraction.rejected:
         log_rejected(conn, "job", source, extraction.rejected)
         raise JobRejected(extraction.rejected[0].message)
@@ -32,10 +34,10 @@ def add_job(conn: psycopg.Connection, raw_job: Any, source: str = "api") -> int:
     # The lock makes the title check and the insert one step, so two requests can't both pass the check.
     with conn.transaction():
         conn.execute(INGEST_LOCK_SQL)
-        if conn.execute(JOB_ID_BY_SLUG_SQL, (record.slug,)).fetchone() is not None:
-            raise JobExists(f"a job titled {record.title!r} already exists")
+        if record.company is not None and conn.execute(JOB_AT_COMPANY_SQL, (record.company, record.slug)).fetchone()[0]:
+            raise JobExists(f"{record.company!r} already has a job titled {record.title!r}")
         insert_batch(conn, build_candidate_batch([]), build_job_batch([record]), source=source)
-        job_id = conn.execute(JOB_ID_BY_SLUG_SQL, (record.slug,)).fetchone()[0]
+        job_id = conn.execute(JOB_ID_BY_KEY_SQL, (record.source_key,)).fetchone()[0]
         # Same transaction, so nobody sees the job without its matches (D-37).
         # Unknown words are linked first, so this record's matches already use the links (D-41).
         link_record_terms(conn, record.skill_slugs, record.culture_trait_slugs)

@@ -10,6 +10,8 @@ class JobProfile:
     min_experience_years: int
     required_skills: list[str]
     culture_keywords: list[str] = field(default_factory=list)
+    company: str | None = None  # shown, never scored (D-53)
+    experience_requirement: str = "required"  # "required" (the default) or "preferred" (D-56)
 
 
 @dataclass(frozen=True)
@@ -20,6 +22,7 @@ class CandidateProfile:
     skills: list[str]
     traits: list[str] = field(default_factory=list)
     job_preferences: list[str] = field(default_factory=list)  # read, but not scored yet (D-47)
+    email: str | None = None  # shown, never scored (D-53)
 
 
 JOB_PROFILES_SQL = """
@@ -39,7 +42,9 @@ JOB_PROFILES_SQL = """
                JOIN traits ON traits.trait_id = job_culture_traits.trait_id
                WHERE job_culture_traits.job_id = jobs.job_id
                ORDER BY traits.slug
-           ) AS culture_keywords
+           ) AS culture_keywords,
+           jobs.company,
+           jobs.experience_requirement
     FROM jobs
     WHERE %(job_id)s::bigint IS NULL OR jobs.job_id = %(job_id)s
     ORDER BY jobs.job_id
@@ -68,7 +73,8 @@ CANDIDATE_PROFILES_SQL = """
                FROM candidate_job_preferences
                WHERE candidate_job_preferences.candidate_id = candidates.candidate_id
                ORDER BY candidate_job_preferences.preference
-           ) AS job_preferences
+           ) AS job_preferences,
+           candidates.email
     FROM candidates
     WHERE %(candidate_id)s::bigint IS NULL OR candidates.candidate_id = %(candidate_id)s
     ORDER BY candidates.candidate_id
@@ -79,8 +85,10 @@ def load_job_profiles(conn: psycopg.Connection, job_id: int | None = None) -> li
     """All jobs, or only the one with job_id."""
     profiles = []
     for row in conn.execute(JOB_PROFILES_SQL, {"job_id": job_id}).fetchall():
-        job_id_value, title, min_experience_years, required_skills, culture_keywords = row
-        profiles.append(JobProfile(job_id_value, title, min_experience_years, required_skills, culture_keywords))
+        job_id_value, title, min_experience_years, required_skills, culture_keywords, company, requirement = row
+        profiles.append(JobProfile(
+            job_id_value, title, min_experience_years, required_skills, culture_keywords, company, requirement,
+        ))
     return profiles
 
 
@@ -88,6 +96,8 @@ def load_candidate_profiles(conn: psycopg.Connection, candidate_id: int | None =
     """All candidates, or only the one with candidate_id."""
     profiles = []
     for row in conn.execute(CANDIDATE_PROFILES_SQL, {"candidate_id": candidate_id}).fetchall():
-        candidate_id_value, full_name, experience_years, skills, traits, job_preferences = row
-        profiles.append(CandidateProfile(candidate_id_value, full_name, experience_years, skills, traits, job_preferences))
+        candidate_id_value, full_name, experience_years, skills, traits, job_preferences, email = row
+        profiles.append(CandidateProfile(
+            candidate_id_value, full_name, experience_years, skills, traits, job_preferences, email,
+        ))
     return profiles

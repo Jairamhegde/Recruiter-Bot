@@ -15,12 +15,18 @@ STRONG_MATCH_SCORE = 70.0
 MATCH_SCORE = 50.0
 
 # D-37: bump whenever the formula, weights or credit rules change, so stored scores are recomputed.
-ALGORITHM_VERSION = "2"
+# 3: matches also store their matched and missing culture keywords, for the evidence (D-50).
+# 4: words the model linked earn capped "suggested" credit (D-54).
+# 5: a job's minimum experience can be required (no match below it) or preferred (at most possible_match) (D-56).
+# 6: required is the default for every job (D-56, revised).
+ALGORITHM_VERSION = "6"
 
 
-def tier_for(score: float) -> str:
-    """How strong a qualifying match is (D-34). Worked out at read time, never stored."""
-    if score >= STRONG_MATCH_SCORE:
+def tier_for(score: float, meets_minimum_experience: bool = True) -> str:
+    """How strong a qualifying match is (D-34). Worked out at read time, never stored.
+    Below the job's minimum experience, a match is at most possible, whatever its score (D-56):
+    "strong" would claim a fit the job's own requirement says is missing."""
+    if score >= STRONG_MATCH_SCORE and meets_minimum_experience:
         return "strong_match"
     if score >= MATCH_SCORE:
         return "possible_match"
@@ -41,17 +47,25 @@ class MatchResult:
     culture_matches: list[TermMatch]
     matched_skills: list[str]
     missing_skills: list[str]
+    matched_culture: list[str]
+    missing_culture: list[str]
     reason: str
+    meets_minimum_experience: bool = True   # the candidate has at least the job's minimum years (D-56)
+    experience_required: bool = False       # the job made the minimum a hard requirement (D-56)
 
     @property
     def qualifies(self) -> bool:
-        """No skill credit means no match (D-12): experience and culture can't create one."""
-        return self.skill_score > 0
+        """No skill credit means no match (D-12): experience and culture can't create one.
+        Neither can a model suggestion on its own (D-54): at least one skill must match through
+        the taxonomy itself, so a guess can only add to a real match, never make one."""
+        if self.experience_required and not self.meets_minimum_experience:
+            return False  # D-56: the job owner made the minimum a hard requirement
+        return any(match.credit.kind != "suggested" for match in self.skill_matches)
 
     @property
     def tier(self) -> str:
         """How strong a qualifying match is (D-34). Only meaningful when qualifies is true."""
-        return tier_for(self.score)
+        return tier_for(self.score, self.meets_minimum_experience)
 
 
 def score_match(candidate: CandidateProfile, job: JobProfile, credit: TermCredit) -> MatchResult:
@@ -86,7 +100,11 @@ def score_match(candidate: CandidateProfile, job: JobProfile, credit: TermCredit
         culture_matches=culture_matches,
         matched_skills=skills.matched_terms,
         missing_skills=skills.missing_terms,
+        matched_culture=culture.matched_terms if culture is not None else [],
+        missing_culture=culture.missing_terms if culture is not None else [],
         reason=build_reason(candidate, job, skills, culture),
+        meets_minimum_experience=candidate.experience_years >= job.min_experience_years,
+        experience_required=job.experience_requirement == "required",
     )
 
 
@@ -117,11 +135,17 @@ def _describe(match: TermMatch) -> str:
         return f"{match.required_term} = {match.candidate_term}"
     if match.credit.kind == "related":
         return f"{match.required_term} ≈ {match.candidate_term} {_fraction(match.credit.value)}"
+    if match.credit.kind == "suggested":
+        return f"{match.required_term} ≈ {match.candidate_term} (suggested {_fraction(match.credit.value)})"
     return match.required_term
 
 
 def _fraction(value: float) -> str:
-    return "½" if value == 0.5 else _number(value)
+    if value == 0.5:
+        return "½"
+    if value == 0.25:
+        return "¼"
+    return _number(value)
 
 
 def _number(value: float) -> str:

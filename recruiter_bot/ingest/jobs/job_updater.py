@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Literal
 
 import psycopg
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -12,7 +12,7 @@ from recruiter_bot.ingest.vocabulary_writer import resolve_skill_ids, resolve_tr
 from recruiter_bot.ingest.taxonomy.term_linker import link_record_terms
 from recruiter_bot.matching.match_store import refresh_job_matches
 
-REQUIRED_FIELDS = ("title", "required_skills", "min_experience_years")
+REQUIRED_FIELDS = ("title", "required_skills", "min_experience_years", "experience_requirement")
 
 
 class JobNotFound(LookupError):
@@ -24,8 +24,10 @@ class JobPatch(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     title: str | None = Field(default=None, min_length=1)
+    company: str | None = Field(default=None, min_length=1)  # null clears it
     required_skills: list[str] | None = Field(default=None, min_length=1)
     min_experience_years: int | None = Field(default=None, ge=0, le=70, strict=True)
+    experience_requirement: Literal["required", "preferred"] | None = None  # D-56
     culture_keywords: list[str] | None = None
     tagline: str | None = None  # null clears it
 
@@ -38,17 +40,19 @@ class JobPatch(BaseModel):
 
 
 CURRENT_JOB_SQL = """
-    SELECT slug, title, min_experience_years, tagline
+    SELECT slug, title, company, min_experience_years, experience_requirement, tagline
     FROM jobs
     WHERE job_id = %s
     FOR UPDATE
 """
 
-OTHER_JOB_WITH_SLUG_SQL = "SELECT EXISTS (SELECT 1 FROM jobs WHERE slug = %s AND job_id <> %s)"
+OTHER_JOB_AT_COMPANY_SQL = """
+    SELECT EXISTS (SELECT 1 FROM jobs WHERE lower(company) = lower(%s) AND slug = %s AND job_id <> %s)
+"""
 
 UPDATE_JOB_SQL = """
     UPDATE jobs
-    SET slug = %s, title = %s, min_experience_years = %s, tagline = %s
+    SET slug = %s, title = %s, company = %s, min_experience_years = %s, experience_requirement = %s, tagline = %s
     WHERE job_id = %s
 """
 
@@ -87,15 +91,22 @@ def update_job(conn: psycopg.Connection, job_id: int, patch: JobPatch, source: s
         current = conn.execute(CURRENT_JOB_SQL, (job_id,)).fetchone()
         if current is None:
             raise JobNotFound(f"No job with id {job_id}")
-        current_slug, title, min_experience_years, tagline = current
+        current_slug, title, company, min_experience_years, experience_requirement, tagline = current
+        if "company" in sent:
+            company = patch.company
+        new_slug = slug or current_slug
+        new_title = patch.title if "title" in sent else title
 
-        if slug is not None and conn.execute(OTHER_JOB_WITH_SLUG_SQL, (slug, job_id)).fetchone()[0]:
-            raise JobExists(f"a job titled {patch.title!r} already exists")
+        # Titles may repeat across companies; within one company they can't (D-53).
+        if company is not None and conn.execute(OTHER_JOB_AT_COMPANY_SQL, (company, new_slug, job_id)).fetchone()[0]:
+            raise JobExists(f"{company!r} already has a job titled {new_title!r}")
 
         conn.execute(UPDATE_JOB_SQL, (
-            slug or current_slug,
-            patch.title if "title" in sent else title,
+            new_slug,
+            new_title,
+            company,
             patch.min_experience_years if "min_experience_years" in sent else min_experience_years,
+            patch.experience_requirement if "experience_requirement" in sent else experience_requirement,
             patch.tagline if "tagline" in sent else tagline,
             job_id,
         ))
