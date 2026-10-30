@@ -48,7 +48,7 @@ The schema in [`migrations/001_init.sql`](../migrations/001_init.sql).
 
 ![Recruiter Bot database schema](er_diagram.png)
 
-The image is rendered from the Mermaid source below, which GitHub also draws directly. To change the diagram, edit the source and re-export it.
+
 
 ```mermaid
 erDiagram
