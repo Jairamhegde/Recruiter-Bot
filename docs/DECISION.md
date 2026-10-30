@@ -52,7 +52,8 @@ One line per decision: what was chosen, and why. Where an earlier version did it
 - `GET /candidates` and `GET /jobs` list ids, because ids aren't predictable.
 - Every match has evidence (what matched, what's missing); the score arithmetic appears only with `?explain=true`.
 - One command starts everything in Docker: migrations, then the seed, then the API. `docker compose run --rm sql-detective` runs Part 2.
+- A demo page at `/ui` (an extension: the brief asks for no frontend). One static file in `frontend/`, served by the same API, so it needs no CORS, no build step and no extra container. It only calls the public endpoints (including the `GET /jobs` and `GET /candidates` lists) and does no scoring of its own, so it can't disagree with the API.
 
 ## Out of scope
 
-Authentication, a UI, résumé parsing, and matching on salary, location or work authorization.
+Authentication, a full UI (beyond the demo page), résumé parsing, and matching on salary, location or work authorization.

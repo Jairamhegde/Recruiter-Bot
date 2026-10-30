@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recruiter Bot</title>
+<!-- A demo page over the JSON API: no build step, no dependencies. Every number shown comes from the API. -->
+<style>
+  :root { --bg: #f6f7f9; --card: #fff; --text: #1d2330; --muted: #667085; --line: #e3e6eb;
+          --accent: #3b5bdb; --strong: #2b8a3e; --possible: #e67700; --near: #868e96; --bad: #c92a2a; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
+  main { max-width: 980px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { margin: 0 0 4px; font-size: 24px; }
+  h2 { font-size: 16px; margin: 0 0 12px; }
+  h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 20px 0 8px; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  .toggle { display: inline-flex; background: var(--line); border-radius: 10px; padding: 4px; margin-bottom: 20px; }
+  .toggle button { border: 0; background: none; padding: 8px 20px; border-radius: 7px; font: inherit; cursor: pointer; color: var(--muted); }
+  .toggle button.on { background: var(--card); color: var(--text); font-weight: 600; box-shadow: 0 1px 2px #0002; }
+  .toggle.small { margin-bottom: 14px; }
+  .toggle.small button { padding: 5px 12px; font-size: 13px; }
+  table.all { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.all th { text-align: left; color: var(--muted); font-weight: 500; padding: 6px 8px 6px 0; }
+  table.all td { border-top: 1px solid var(--line); padding: 6px 8px 6px 0; vertical-align: top; }
+  table.all tr.link { cursor: pointer; }
+  table.all tr.link:hover td { background: var(--bg); }
+  .grid { display: grid; grid-template-columns: 320px 1fr; gap: 20px; align-items: start; }
+  @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+  .panel { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
+  input, select { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; font: inherit; background: #fff; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 3px; }
+  .row { display: flex; gap: 10px; align-items: center; }
+  .row > * { flex: 1; }
+  button.primary { margin-top: 14px; width: 100%; padding: 9px; border: 0; border-radius: 8px; background: var(--accent); color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+  .check { display: flex; gap: 6px; align-items: center; font-size: 13px; color: var(--muted); margin: 0; white-space: nowrap; }
+  .check input { width: auto; }
+  .profile { font-size: 13px; color: var(--muted); margin-top: 10px; }
+  .card { border: 1px solid var(--line); border-left: 4px solid var(--near); border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; background: #fff; }
+  .card.strong_match { border-left-color: var(--strong); }
+  .card.possible_match { border-left-color: var(--possible); }
+  .head { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+  .name { font-weight: 600; }
+  .score { font-weight: 700; font-size: 18px; }
+  .badge { display: inline-block; font-size: 11px; padding: 1px 8px; border-radius: 99px; background: var(--line); color: var(--text); margin-left: 6px; font-weight: 500; }
+  .reason { color: var(--muted); font-size: 13px; margin: 4px 0 8px; }
+  .chips { font-size: 13px; margin: 3px 0; }
+  .chip { display: inline-block; padding: 1px 8px; border-radius: 6px; margin: 2px 2px 0 0; font-size: 12px; }
+  .ok { background: #ebfbee; color: var(--strong); }
+  .miss { background: #fff5f5; color: var(--bad); text-decoration: line-through; }
+  .note { font-style: italic; color: var(--muted); font-size: 13px; margin-top: 6px; }
+  table.bd { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 8px; }
+  table.bd td { border-top: 1px solid var(--line); padding: 4px 6px 4px 0; }
+  .empty { color: var(--muted); padding: 12px 0; }
+  .error { background: #fff5f5; color: var(--bad); border: 1px solid #ffc9c9; border-radius: 8px; padding: 10px; margin-bottom: 12px; white-space: pre-wrap; font-size: 13px; }
+  .flash { background: #ebfbee; color: var(--strong); border-radius: 8px; padding: 10px; margin-bottom: 12px; font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Recruiter Bot</h1>
+  <p class="sub">Pick a job or a candidate to see the ranked matches, or add one and see its matches straight away. Prefer raw JSON? Use <a href="/docs">/docs</a>.</p>
+
+  <div class="toggle" role="tablist">
+    <button id="tab-recruiter" class="on" onclick="setMode('recruiter')">Recruiter</button>
+    <button id="tab-candidate" onclick="setMode('candidate')">Candidate</button>
+  </div>
+
+  <div class="grid">
+    <section class="panel">
+      <!-- Recruiter: add a job -->
+      <form id="form-recruiter" onsubmit="addJob(event)">
+        <h2>Add a job</h2>
+        <label>Title</label><input name="title" required placeholder="Data Detective">
+        <label>Required skills</label><input name="required_skills" required placeholder="SQL, Python, Deduction">
+        <div class="hint">Comma-separated. Synonyms are matched by meaning.</div>
+        <div class="row">
+          <div><label>Min. years</label><input name="min_experience_years" type="number" min="0" max="70" value="3" required></div>
+          <div><label>Experience is</label>
+            <select name="experience_requirement"><option value="required">required</option><option value="preferred">preferred</option></select></div>
+        </div>
+        <label>Culture keywords</label><input name="culture_keywords" placeholder="curious, analytical">
+        <label>Tagline (shown, never scored)</label><input name="tagline">
+        <button class="primary">Add job and match</button>
+      </form>
+
+      <!-- Candidate: add a candidate -->
+      <form id="form-candidate" onsubmit="addCandidate(event)" hidden>
+        <h2>Add a candidate</h2>
+        <label>Name</label><input name="name" required placeholder="Jordan P.">
+        <label>Skills</label><input name="skills" required placeholder="Crisis Management, Strategy, Persuasion">
+        <div class="hint">Comma-separated.</div>
+        <div class="row">
+          <div><label>Years of experience</label><input name="experience_years" type="number" min="0" max="70" value="5" required></div>
+          <div><label>Availability</label><input name="availability" required value="Immediate" list="avail"></div>
+        </div>
+        <datalist id="avail"><option value="Immediate"><option value="2 weeks"><option value="1 month"><option value="Not looking"></datalist>
+        <label>Traits</label><input name="traits" placeholder="calm, decisive">
+        <label>Quirk (shown, never scored)</label><input name="quirk">
+        <button class="primary">Add candidate and match</button>
+      </form>
+    </section>
+
+    <section class="panel">
+      <div class="toggle small">
+        <button id="view-matches" class="on" onclick="setView('matches')">Matches</button>
+        <button id="view-jobs" onclick="setView('jobs')">All jobs</button>
+        <button id="view-candidates" onclick="setView('candidates')">All candidates</button>
+      </div>
+      <div id="match-controls">
+        <div class="row">
+          <select id="picker" onchange="loadMatches()"></select>
+          <label class="check" style="flex:0"><input type="checkbox" id="explain" onchange="loadMatches()"> Show the arithmetic</label>
+        </div>
+        <div id="profile" class="profile"></div>
+      </div>
+      <div id="out"></div>
+    </section>
+  </div>
+</main>
+
+<script>
+let mode = 'recruiter';
+let view = 'matches';  // matches | jobs | candidates
+let records = [];   // the jobs or candidates in the picker
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const list = s => s.split(',').map(x => x.trim()).filter(Boolean);
+const TIERS = { strong_match: 'Strong match', possible_match: 'Possible match', near_miss: 'Near miss' };
+
+async function api(path, options = {}) {
+  const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...options });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    // FastAPI's 422 detail is a list of {loc, msg}; show it as plain lines.
+    const detail = Array.isArray(body.detail)
+      ? body.detail.map(d => `${d.loc.slice(1).join('.') || 'input'}: ${d.msg}`).join('\n')
+      : body.detail || res.statusText;
+    throw new Error(`${res.status}: ${detail}`);
+  }
+  return body;
+}
+
+function setMode(next, selectId) {
+  mode = next;
+  $('tab-recruiter').classList.toggle('on', mode === 'recruiter');
+  $('tab-candidate').classList.toggle('on', mode === 'candidate');
+  $('form-recruiter').hidden = mode !== 'recruiter';
+  $('form-candidate').hidden = mode !== 'candidate';
+  loadPicker(selectId);
+}
+
+// The right panel shows either the matches for one record, or a plain list of every job or candidate.
+function markView(next) {
+  view = next;
+  for (const v of ['matches', 'jobs', 'candidates']) $(`view-${v}`).classList.toggle('on', v === view);
+  $('match-controls').hidden = view !== 'matches';
+}
+
+function setView(next) {
+  markView(next);
+  view === 'matches' ? loadMatches() : loadList();
+}
+
+async function loadList() {
+  try {
+    const rows = await api(`/${view}`);
+    const jobs = view === 'jobs';
+    const head = jobs
+      ? '<tr><th>#</th><th>Title</th><th>Required skills</th><th>Min. years</th><th>Culture</th></tr>'
+      : '<tr><th>#</th><th>Name</th><th>Skills</th><th>Years</th><th>Traits</th></tr>';
+    const body = rows.map(r => jobs
+      ? `<tr class="link" onclick="openMatches('recruiter', ${r.job_id})"><td>${r.job_id}</td><td>${esc(r.title)}</td><td>${esc(r.required_skills.join(', '))}</td><td>${r.min_experience_years} (${r.experience_requirement})</td><td>${esc(r.culture_keywords.join(', '))}</td></tr>`
+      : `<tr class="link" onclick="openMatches('candidate', ${r.candidate_id})"><td>${r.candidate_id}</td><td>${esc(r.name)}</td><td>${esc(r.skills.join(', '))}</td><td>${r.experience_years}</td><td>${esc(r.traits.join(', '))}</td></tr>`
+    ).join('');
+    $('out').innerHTML = `<div class="hint" style="margin-bottom:8px">${rows.length} ${view}. Click a row to see its matches.</div><table class="all">${head}${body}</table>`;
+  } catch (e) { showError(e); }
+}
+
+function openMatches(nextMode, id) {
+  markView('matches');
+  setMode(nextMode, id);
+}
+
+async function loadPicker(selectId) {
+  try {
+    records = await api(mode === 'recruiter' ? '/jobs' : '/candidates');
+  } catch (e) { return showError(e); }
+  const idOf = r => mode === 'recruiter' ? r.job_id : r.candidate_id;
+  const label = r => mode === 'recruiter'
+    ? `#${r.job_id} ${r.title}` : `#${r.candidate_id} ${r.name}`;
+  $('picker').innerHTML = records.map(r => `<option value="${idOf(r)}">${esc(label(r))}</option>`).join('');
+  if (selectId) $('picker').value = selectId;
+  loadMatches();
+}
+
+function showProfile(id) {
+  const r = records.find(x => (x.job_id ?? x.candidate_id) == id);
+  if (!r) return $('profile').innerHTML = '';
+  $('profile').innerHTML = mode === 'recruiter'
+    ? `Needs <b>${esc(r.required_skills.join(', '))}</b> · ${r.min_experience_years}y min (${r.experience_requirement}) · culture: ${esc(r.culture_keywords.join(', ') || 'none')}`
+    : `Has <b>${esc(r.skills.join(', '))}</b> · ${r.experience_years}y · traits: ${esc(r.traits.join(', ') || 'none')}`;
+}
+
+async function loadMatches(flash) {
+  const id = $('picker').value;
+  if (!id || view !== 'matches') return;
+  showProfile(id);
+  const path = mode === 'recruiter' ? `/jobs/${id}/matches` : `/candidates/${id}/matches`;
+  try {
+    render(await api(path + ($('explain').checked ? '?explain=true' : '')), flash);
+  } catch (e) { showError(e); }
+}
+
+function render(data, flash) {
+  let html = flash ? `<div class="flash">${esc(flash)}</div>` : '';
+  const m = data.matches;
+  // The strong tier is always shown, so an empty one says so; the others only when they have entries.
+  const shown = Object.keys(TIERS).filter(t => t === 'strong_match' || m[t].length);
+  for (const t of shown) {
+    html += `<h3>${TIERS[t]} (${m[t].length})${t === 'near_miss' ? ' (shown only because nobody reaches 50)' : ''}</h3>`;
+    html += m[t].length ? m[t].map(e => card(e, t)).join('') : `<div class="empty">No strong match.</div>`;
+  }
+  if (shown.length === 1 && !m.strong_match.length && !(data.proactive_offers || []).length) html += `<div class="empty">No matches at all.</div>`;
+  if (mode === 'recruiter' && data.proactive_offers.length) {
+    html += `<h3>Proactive offers: not looking, but a better fit than anyone who is</h3>`;
+    html += data.proactive_offers.map(e => card(e, e.tier)).join('');
+  }
+  $('out').innerHTML = html;
+}
+
+function chips(ev) {
+  return ev.matched.map(s => `<span class="chip ok">${esc(s)}</span>`).join('')
+       + ev.missing.map(s => `<span class="chip miss">${esc(s)}</span>`).join('');
+}
+
+function card(e, tier) {
+  const title = mode === 'recruiter' ? e.candidate_name : e.job_title;
+  const badges = [
+    !e.meets_minimum_experience && '<span class="badge">below min. experience</span>',
+    e.top_applicant && '<span class="badge">top applicant</span>',
+  ].filter(Boolean).join('');
+  const ev = e.evidence;
+  const note = mode === 'recruiter' ? e.quirk : e.tagline;
+  let bd = '';
+  if (e.score_breakdown) {
+    const rows = ['skills', 'experience', 'culture'].filter(k => e.score_breakdown[k]).map(k => {
+      const f = e.score_breakdown[k];
+      return `<tr><td>${k}</td><td>${f.detail}</td><td>${f.score.toFixed(2)} × ${Math.round(f.weight * 100)}</td><td><b>${f.points.toFixed(1)}</b> pts</td></tr>`;
+    }).join('');
+    bd = `<table class="bd">${rows}</table>`;
+  }
+  return `<div class="card ${tier}">
+    <div class="head"><div><span class="name">#${e.rank} ${esc(title)}</span>${badges}</div><div class="score">${e.score.toFixed(1)}</div></div>
+    <div class="reason">${esc(e.reason)}</div>
+    <div class="chips">Skills: ${chips(ev.skills)}</div>
+    ${ev.culture ? `<div class="chips">Culture: ${chips(ev.culture)}</div>` : ''}
+    <div class="chips">Experience: ${esc(ev.experience.detail)}</div>
+    ${bd}
+    ${note ? `<div class="note">“${esc(note)}”</div>` : ''}
+  </div>`;
+}
+
+function showError(e) { $('out').innerHTML = `<div class="error">${esc(e.message)}</div>`; }
+
+async function submit(event, path, build, idKey, noun) {
+  event.preventDefault();
+  const form = event.target;
+  try {
+    const result = await api(path, { method: 'POST', body: JSON.stringify(build(new FormData(form))) });
+    form.reset();
+    markView('matches');
+    await loadPicker(result[idKey]);
+    loadMatches(`Added ${noun} #${result[idKey]}. Its matches are below.`);
+  } catch (e) { showError(e); }
+}
+
+function addJob(event) {
+  submit(event, '/jobs', f => ({
+    title: f.get('title'),
+    required_skills: list(f.get('required_skills')),
+    min_experience_years: Number(f.get('min_experience_years')),
+    experience_requirement: f.get('experience_requirement'),
+    culture_keywords: list(f.get('culture_keywords')),
+    tagline: f.get('tagline') || null,
+  }), 'job_id', 'job');
+}
+
+function addCandidate(event) {
+  submit(event, '/candidates', f => ({
+    name: f.get('name'),
+    skills: list(f.get('skills')),
+    experience_years: Number(f.get('experience_years')),
+    availability: f.get('availability'),
+    traits: list(f.get('traits')),
+    quirk: f.get('quirk') || null,
+  }), 'candidate_id', 'candidate');
+}
+
+loadPicker();
+</script>
+</body>
+</html>

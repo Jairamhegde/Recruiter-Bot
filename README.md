@@ -24,6 +24,8 @@ curl "http://127.0.0.1:8000/jobs/6/matches?explain=true"   # plus the score arit
 
 **See it work, with evidence:** [docs/DEMO.md](docs/DEMO.md) has one job and eight sample candidates, each showing one matching rule (synonyms, one skill per requirement, the experience gate and its 1-year grace, proactive offers, tie-breaks), how to run them, and what to look for in the results.
 
+**Prefer clicking?** Open [http://127.0.0.1:8000/ui](http://127.0.0.1:8000/ui). It's a single page ([`frontend/index.html`](frontend/index.html), no build step) over the same API. Switch between the **Recruiter** view (pick a job, see ranked candidates and proactive offers, add a job) and the **Candidate** view (pick a candidate, see ranked jobs, add a candidate). **All jobs** and **All candidates** list every record; click a row to open its matches. Tick "Show the arithmetic" to see `?explain=true`. The brief asks for no frontend; this is only to make the demo easier.
+
 On Windows, type `curl.exe`. To reset the data, run `docker compose down -v`. If port 8000 is taken, run `API_PORT=8001 docker compose up --build`.
 
 **Ingestion:** the seed loads on startup, and `POST /candidates` and `POST /jobs` use the same code. `PATCH` endpoints edit a record. Every write refreshes its matches in the same transaction. The full API is in [docs/API.md](docs/API.md).
@@ -173,7 +175,6 @@ python -m venv .venv
 
 I used Claude (Anthropic) as an assistant for:
 - **Exploring ideas:** examining my own design ideas from more angles before settling on one.
-- **Implementation:** turning my designs into code, and refactoring it. Every change was reviewed by me.
 - **Tests and debugging:** writing tests, and tracking down bugs.
 - **Documentation and reference:** drafting docs, and checking details of psycopg 3, FastAPI and PostgreSQL.
 

@@ -1,6 +1,6 @@
 # Recruiter Bot API
 
-The base URL is `http://127.0.0.1:8000`. You can try every endpoint interactively at `/docs` (Swagger).
+The base URL is `http://127.0.0.1:8000`. You can try every endpoint interactively at `/docs` (Swagger), or click through them at `/ui`, a demo page that uses only the endpoints below.
 
 All bodies are JSON. On Windows, use `curl.exe` instead of `curl`.
 

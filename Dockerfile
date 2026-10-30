@@ -13,6 +13,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY recruiter_bot/ recruiter_bot/
 COPY migrations/ migrations/
 COPY seed/ seed/
+COPY frontend/ frontend/
 
 # Runs as an unprivileged user, not root.
 RUN useradd --create-home app
